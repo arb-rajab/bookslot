@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+         bootstrap="vendor/autoload.php"
+         colors="true"
+>
+    <testsuites>
+        <testsuite name="Unit">
+            <directory>tests/Unit</directory>
+        </testsuite>
+        <testsuite name="Feature">
+            <directory>tests/Feature</directory>
+        </testsuite>
+        <testsuite name="TenantIsolation">
+            <directory>tests/TenantIsolation</directory>
+        </testsuite>
+    </testsuites>
+    <source>
+        <include>
+            <directory>app</directory>
+        </include>
+    </source>
+    <php>
+        <!--
+            07-testing-strategy.md: no test in this suite may fall back to
+            SQLite — tstzrange, GIST exclusion constraints, and RLS have no
+            SQLite equivalent. Real environment values (host/credentials)
+            come from .env.testing, which Laravel loads automatically for
+            APP_ENV=testing; only test-run-specific overrides live here.
+        -->
+        <env name="APP_ENV" value="testing"/>
+    </php>
+</phpunit>

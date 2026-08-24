@@ -1,7 +1,7 @@
 # Deployment and Operations
 > Purpose: how this runs, and how someone else keeps it running.
 > Project: bookslot (PRIVATE track)
-> Last updated: 2026-08-24 (Session 5 — first full version, superseding Session 0/1's deferred stub)
+> Last updated: 2026-08-24 (Session 5 — first full version, superseding Session 0/1's deferred stub; amended Session 8 — `composer ci:check` now exists, verified exit 0, real contents recorded against this document's prediction)
 
 This is the first real pass at this file. No application code exists yet, so
 everything below is an operational design decided against `03`
@@ -363,6 +363,43 @@ directly from `07` and this session's rulings rather than invented fresh:
   `07`'s nightly/pre-deploy tier: the true-concurrency, separate-connection
   DB-constraint tests; the real-Stripe-test-mode payment subtier; the single
   J1 E2E browser smoke test (D-0018).
+
+**Amendment (Session 8, 2026-08-24) — `composer ci:check` now exists,
+matching this prediction with two scope notes.** `composer ci:check` runs
+`pint --test` (style), `phpstan analyse` via Larastan (static analysis,
+level 5), then `pest --exclude-group=slow` (the fast test suite, tenant-
+isolation included) — exits 0, verified. Actual runtime: ~7 seconds
+wall-clock for the whole gate; the tenant-isolation suite alone (`composer
+test:tenant-isolation`), the piece D-0017 puts a 60-second budget on, runs
+in ~3 seconds. Both are far under budget, as expected for a suite whose case
+count is manifest-driven rather than open-ended (D-0017's own reasoning).
+Two differences from the prediction above, both scope-driven rather than
+contradictions:
+- **No unit or feature tests exist yet, so those two bullets are currently
+  empty categories inside the fast gate, not populated ones.** This
+  session's hard scope boundary was schema, tenant-context plumbing, and
+  the tenant-isolation suite only — no controllers, endpoints, or business
+  logic exist yet for a feature test to exercise, and no pure-logic code
+  (deposit calculation, buffer arithmetic, etc.) exists yet for a unit test
+  to exercise either. `composer.json` already carries `test:unit`/
+  `test:feature` scripts pointed at empty directories, ready for a future
+  session to fill in — not invented placeholder tests.
+- **The tenant-isolation suite runs as part of one combined `pest` invocation
+  in `ci:check`, not as its own separately-timed CI step.** Its runtime is
+  independently measurable via `composer test:tenant-isolation` (used above
+  to confirm the 60-second budget), and Pest's own JSON output reports pass/
+  fail per suite — but wiring a real CI pipeline (e.g., a dedicated GitHub
+  Actions job/step boundary around just that suite, per D-0017's "visibly-
+  timed step" framing) is real CI-configuration work this session didn't do,
+  since no CI pipeline configuration exists yet in this repository at all.
+- **Two Postgres connections, not one, per D-0009/D-0020's already-decided
+  role split:** `pgsql` (`bookslot_app`, the runtime/test-query connection)
+  and `pgsql_migrator` (`bookslot_migrator`, used only to run migrations,
+  including the one-time schema setup `composer ci:check`'s own test run
+  triggers via a `RefreshDatabase` override — see
+  `tests/Concerns/RefreshesTenantDatabase.php`). This isn't a deviation from
+  either decision, just the first time it's been reflected in actual
+  application/test configuration rather than only in prose.
 
 ## Open questions
 

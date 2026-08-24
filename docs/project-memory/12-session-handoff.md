@@ -8,7 +8,10 @@
 - Product/domain: booking, deposits, and no-show protection for
   appointment-based service businesses (illustrative vertical: tattoo
   studios — see `00-project-brief.md`)
-- Current version or branch: `main`, no tags, no application code yet.
+- Current version or branch: `main`, no tags. Application code exists as of
+  Session 8: Laravel API scaffold, database schema/migrations, tenant-context
+  plumbing, and the tenant-isolation test suite — no controllers, routes,
+  Stripe integration, or frontend yet. See the Session 8 amendment below.
 
 ## Session completed
 - Session number and title: **Session 3 — Gap Resolution and Testing
@@ -687,3 +690,213 @@ file — `10`/`11`/`13`/`14` untouched, no application code, D-0015(a)
 "needs your ruling" item left standing after this session is D-0015(a)
 itself; everything else is now either resolved or pilot-dependent — see
 this file's Session 7 amendment above for the full open-items split.
+
+## Amendment (Session 8, 2026-08-24) — first implementation session: scaffold, migrations, tenant-context plumbing, tenant-isolation suite
+
+**Objective:** the first session to write actual application code. Scaffold
+Laravel, stand up `composer ci:check`, translate `04`'s DDL into real
+migrations, build the smallest real tenant-context mechanism, and implement
+`07`'s tenant-isolation suite. Explicitly out of scope: controllers, routes,
+endpoints, Stripe integration, notification jobs, availability computation,
+the booking flow, or any frontend work — all confirmed untouched.
+
+**Phase 1 — scaffold and gate.** Laravel 13 (PHP 8.4) scaffolded at the repo
+root, API-only (no Blade/Inertia — `routes/web.php` carries no routes; no
+`resources/views`), matching `03`'s decoupled-architecture direction.
+`composer.json` gained `ci:check` (→ `pint --test` then `phpstan analyse`
+via Larastan level 5 then `pest --exclude-group=slow`) plus
+`test:unit`/`test:feature`/`test:tenant-isolation`/`test:slow` scripts.
+**Verified: `composer ci:check` exits 0** — Pint clean, PHPStan 0 errors,
+16/16 Pest tests passing, 150 assertions, ~7s wall-clock for the whole gate.
+Local Postgres 17 + Redis via `docker-compose.yml`
+(`docker/postgres/init/01-roles-and-database.sql` creates both database
+roles automatically on first volume init). Both D-0009 roles exist and are
+genuinely separate credentials in `.env.example`/`config/database.php`:
+`bookslot_app` (connection `pgsql`, the only runtime role) and
+`bookslot_migrator` (connection `pgsql_migrator`, holds `BYPASSRLS`, used
+only for `--database=pgsql_migrator` migration runs — confirmed via a live
+query that `bookslot_app`'s `rolbypassrls` is `false` and
+`bookslot_migrator`'s is `true`). Per D-0020, `bookslot_migrator`'s
+credential lives only in local `.env`/CI-irrelevant config, never wired into
+any automated non-migration path.
+
+**Phase 2 — migrations.** All 18 migrations translate `04`'s DDL faithfully,
+in `04`'s exact order (extension → function → tables → exclusion constraint
+→ RLS), using `DB::unprepared()` raw SQL throughout — Laravel's schema
+builder cannot express `tstzrange`, `GENERATED ALWAYS AS ... STORED`,
+`EXCLUDE USING gist`, or RLS policies. Every migration has a working
+`down()`. **Confirmed by execution: migrate → rollback (all 18, clean) →
+re-migrate (all 18, clean) from an empty database**, run against real
+PostgreSQL 17.11. `occupancy_window()` carries `SET search_path = pg_catalog,
+pg_temp` inline per D-0008; `occupancy_range` is a STORED generated column;
+buffer columns are `NOT NULL` with no default and the `[0,1440]` CHECKs; the
+containment CHECK and the tenant+staff-scoped partial `EXCLUDE USING gist`
+on `occupancy_range` are both present, verified via `\d appointments`.
+`payment_mandates` carries the full D-0022 erasure carve-out column set;
+`notification_deliveries.purpose` includes `rebooking_invite` (D-0023). RLS
+is enabled + forced on all 12 manifest tables (`config('tenancy.
+tenant_scoped_tables')`), each with a `tenant_isolation` policy — `tenants`
+and `stripe_webhook_events` correctly carry neither, confirmed via
+`pg_class`/`pg_policies` introspection.
+**One genuine gap found only by executing the DDL, not by reading it — see
+`09-decision-log.md` D-0025 and `04`'s new Session 8 amendment:** D-0005/`04`
+claim `current_setting(..., true)` returns `NULL` when the tenant GUC is
+unset; verified against real Postgres that this is only true for a
+connection that has *never* set it — once set even once (even after a real
+`COMMIT`), the same connection gets `''` (empty string) thereafter, which
+raises `SQLSTATE 22P02` on the `::uuid` cast instead of comparing as `NULL`.
+Under this project's own chosen PgBouncer transaction-mode pooling, that's
+the normal state on every backend connection after its first tenant-scoped
+transaction. Presented to the user as a real divergence between documented
+and actual behavior, per this session's instruction to stop and report
+rather than silently patch; the user chose to fix the policy expression now.
+Every `tenant_isolation` policy now reads `tenant_id = NULLIF(current_
+setting(...), '')::uuid`, verified directly against Postgres both before
+and after the change.
+
+**Phase 3 — tenant-context plumbing (the smallest real mechanism, not
+route-driven middleware for routes that don't exist).** `App\Tenancy\
+TenantContext::run($tenantId, $callback)` opens a transaction, sets the GUC
+via parameterized `set_config(..., true)` as its first statement, then
+restores the prior app-layer tenant on exit — the single, only mechanism
+used anywhere. `App\Tenancy\CurrentTenant` is the process-local holder the
+app-layer scope reads. `App\Models\Scopes\TenantScope` (and `UserTenantScope`
+for `users`' platform-admin bypass) implement D-0005's first enforcement
+layer, applied via `App\Models\Concerns\BelongsToTenant` on every
+tenant-scoped Eloquent model — fail-closed at the app layer too (no context
+set → `1=0`, mirroring RLS's own fail-closed design). `App\Jobs\
+TenantScopedJob` requires `tenant_id` in its constructor (refuses
+construction/dispatch without one) and re-sets the GUC via job middleware
+(`App\Jobs\Middleware\SetsTenantContext`) on every execution attempt,
+including retries; `App\Jobs\PlatformJob` is the tenant-less base for
+housekeeping. `App\Http\Middleware\SetTenantContext` exists and is
+registered as a named alias (`tenant.context`) but attached to no route —
+real request-level tenant *resolution* (slug lookup, auth, D-0021's signed
+token) is explicitly next-session work, noted below.
+
+**Phase 4 — the tenant-isolation suite.** `tests/TenantIsolation/` (16
+tests, 150 assertions) covers every bullet this session was scoped to,
+against real Postgres, no SQLite anywhere:
+- **Manifest completeness + RLS enforcement**
+  (`RlsManifestTest.php`): introspects `information_schema.columns`/
+  `pg_class`/`pg_policies` against `config('tenancy.tenant_scoped_tables')` —
+  parameterized over the live schema, not hand-maintained per table.
+  **Demonstrated actually failing, not just written:** added a throwaway
+  `unprotected_demo_table` (tenant-scoped, no RLS) via a temporary migration,
+  ran the suite, watched the manifest-completeness test fail with an exact
+  diff naming the new table, then deleted the migration and confirmed the
+  suite passes clean again. This is the guard's whole value — verified, not
+  assumed.
+- **Global scope bypassed** (`GlobalScopeBypassTest.php`): raw `DB::select`,
+  the query builder (`DB::table`), and a raw `DB::statement` INSERT attempt
+  claiming a different tenant (rejected by the policy's `WITH CHECK`, which
+  defaults to the `USING` expression) — all three never touch Eloquent.
+  Includes the fail-closed-with-no-context case (using `TenantContext::
+  clear()`, added specifically because a nested `TenantContext::run()` call
+  under Pest's `RefreshDatabase`-wrapped transaction only opens a savepoint,
+  which — per the D-0025 finding — doesn't reset the GUC the way a real
+  `COMMIT` would need to anyway).
+- **Eager loading and relationship traversal** (`EagerLoadingTest.php`):
+  `Appointment::with('staff','service','customer')` never resolves a
+  different tenant's row, whether via RLS filtering the relation query or
+  the base row itself being invisible under the wrong context.
+- **Cross-tenant ID access at the model layer** (`CrossTenantModelAccessTest.
+  php`, replacing 07's endpoint-based version since no controllers exist):
+  every manifest table's model refuses to resolve another tenant's real row
+  by id; a real (not guessed) staff id belonging to a different tenant, used
+  as a foreign key while under the wrong context, still resolves to `null`
+  on read — the FK constraint itself doesn't stop this (Postgres documents
+  that referential-integrity checks bypass RLS), so this is a genuine test
+  of the read-time backstop, not a redundant one.
+- **Queue jobs without tenant context; jobs retried after a context change**
+  (`QueueJobTenantContextTest.php`): constructing a `TenantScopedJob`
+  subclass with an empty tenant id throws; `dispatchSync()` (which, with
+  `QUEUE_CONNECTION=sync`, does run the real job-middleware pipeline —
+  confirmed by reading Laravel's own dispatcher source, not assumed) sets
+  the GUC correctly for the job's own tenant; a tenant-A job that "retries"
+  after a tenant-B job ran on the same simulated worker still observes
+  tenant A, never B.
+- **`BYPASSRLS` unreachable from application runtime**
+  (`BypassRlsUnreachableTest.php`): the app's configured runtime username is
+  `bookslot_app`, not `bookslot_migrator`; a live query on the runtime
+  connection confirms `rolbypassrls = false`; a live query on the migrator
+  connection confirms the opposite, so the first assertion is proven to
+  actually discriminate rather than passing by coincidence.
+
+**Actual runtime against the 60-second budget (D-0017): the tenant-isolation
+suite alone (`composer test:tenant-isolation`) runs in ~3 seconds** — the
+schema-setup migration (also via `bookslot_migrator`, ~1 second) plus Pest
+itself. Far under budget.
+
+**Phase 5 — commit.** `.gitignore` updated: `.env.testing` is explicitly
+un-ignored (it carries no real secrets — fixed local-only Postgres
+passwords matching `docker/postgres/init/`, needed for `composer ci:check`
+to work identically on every clone/CI run). Confirmed via `git status`/
+`git add -n` that no `.env`, `vendor/`, or generated cache/log file
+(`bootstrap/cache/*.php`, `storage/logs/*`, `storage/framework/testing/
+_pest.php`) is staged. Single commit; see the repository's commit history
+for its SHA — `git status` is clean after it.
+
+**Files touched this session:** every file under `app/`, `bootstrap/`,
+`config/`, `database/`, `docker/`, `public/`, `routes/`, `storage/`,
+`tests/` (all new), `artisan`, `composer.json`/`composer.lock`,
+`docker-compose.yml`, `phpunit.xml`, `phpstan.neon.dist`, `.env.example`,
+`.env.testing`, `.editorconfig`, `.gitattributes`, `.gitignore` (amended),
+`README.md`/`CONTRIBUTING.md` (setup instructions filled in). Project-memory
+files touched: `09-decision-log.md` (D-0025), `04-data-model.md` (Session 8
+amendment reflecting D-0025 and noting migrations now exist),
+`08-deployment-and-operations.md` (Session 8 amendment: `ci:check`'s real
+contents against its own prediction), this file. **Not touched, per this
+session's explicit constraints:** `02`, `03`, `05`, `06`, `10`, `11`, `13`,
+`14` — nothing this session did contradicted or needed to amend any of them.
+
+**What turned out to need a ruling mid-session (not silently decided):**
+the D-0025 RLS fail-closed gap above — presented with two options (harden
+the policy expression now, vs. leave the DDL as-is and document the gap for
+a future session), user chose to harden it now. No other documented
+decision was found to be wrong or unimplementable as written this session —
+D-0007/D-0008's exclusion-constraint DDL, the RLS role split, the buffer/
+occupancy-range mechanics, and the manifest-driven test design all executed
+exactly as `04`/`07`/`09` describe.
+
+**What this session deliberately did NOT build, and why:**
+- No `tests/Unit` or `tests/Feature` content — no pure-logic code (deposit
+  calculation, buffer arithmetic) or controllers/endpoints exist yet for
+  either layer to exercise. The composer scripts and test-suite
+  registrations already exist, pointed at currently-empty directories.
+- No `tests/` coverage for `07`'s "Concurrency and slot integrity" section
+  (true multi-connection exclusion-constraint races, `'[)'` boundary cases,
+  DST-pinned fixtures) — that section is about D-0007/D-0008 correctness
+  under concurrency, a different (and, per `07` itself, slower/nightly-tier)
+  concern from tenant isolation, and this session's Phase 4 instruction
+  named exactly the tenant-isolation bullets above, not that section.
+- No HTTP-level tenant resolution (slug lookup, auth, D-0021's signed
+  token), no controllers, no routes, no Stripe, no frontend — all
+  explicitly out of this session's scope per its own hard boundary.
+
+## Next recommended session
+
+- Proposed session title: **Session 9 — Real Tenant Resolution and the
+  Booking-Creation Path, or a Real Pilot Discovery.**
+- As in every prior handoff: a real candidate pilot studio becoming
+  available should take priority over further build work — R-01 remains the
+  standing top risk in `10-risk-register.md`, now untouched by eight
+  sessions in a row (two build, six design). Absent that, the natural next
+  build-side session is wiring `App\Http\Middleware\SetTenantContext` into
+  an actual request lifecycle: the slug-based public-booking resolution and
+  the authenticated owner/staff path (D-0009's two named public-path
+  mechanisms, plus D-0021's signed-token class), which unblocks writing the
+  first real controllers/routes and, with them, the first Feature-layer
+  tests `07` describes. `04`'s Availability modeling section ("derived, not
+  materialized") and the booking-creation path (J1–J3) are the concrete
+  first slice once resolution exists — that's also what would finally
+  exercise `07`'s Concurrency and slot integrity section for real.
+- Inputs required: this Project Memory Pack, particularly `05-api-contracts.
+  md` for the endpoint shapes already specified, `09` D-0009/D-0021 for the
+  exact tenant-resolution mechanisms to implement, and `07`'s Concurrency
+  and slot integrity section for the true-multi-connection test pattern
+  once booking creation exists to test.
+- Definition of done: at minimum, the public booking-page slug resolution
+  path wired end-to-end (middleware → real tenant lookup → RLS-protected
+  read), with a Feature test proving it, and this handoff file updated with
+  the new session's amendment.

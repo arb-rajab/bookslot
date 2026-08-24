@@ -34,11 +34,18 @@ or co-founders), not for the general public.
 
 ## Development setup
 
-No application code exists yet (Session 0/1 — discovery and business
-framing only). This section will be filled in once the initial Laravel API
-+ frontend scaffold lands, matching the setup style used elsewhere in this
-developer's portfolio (Docker Compose for Postgres/Redis/app, `docker
-compose up --build`, `composer test`/`composer lint`/`composer analyse`).
+See [`README.md`](README.md#local-development) for the full local setup
+(Docker Compose for Postgres/Redis, the two-role `bookslot_app`/
+`bookslot_migrator` database credential split per D-0009/D-0020, and the
+`composer ci:check`/`composer test:fast` scripts). The Nuxt frontend hasn't
+landed yet — this is the Laravel API side only.
+
+Before opening a PR (or committing directly, per this stage's trunk rule
+above): `composer ci:check` must exit 0. It runs Pint (style), Larastan/
+PHPStan (static analysis), and the fast test suite — including the
+tenant-isolation suite, which is a blocking, non-negotiable part of that
+gate per D-0017 (`docs/project-memory/09-decision-log.md`), not something to
+work around or skip under time pressure.
 
 ## Reporting security issues
 

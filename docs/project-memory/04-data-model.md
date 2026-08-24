@@ -1,7 +1,7 @@
 # Data Model
 > Purpose: the authoritative description of stored data.
 > Project: bookslot (PRIVATE track)
-> Last updated: 2026-08-24 (Session 4 — D-0008's DDL corrected after execution testing; see amendment note near the `appointments` table; amended Session 5 — buffer made a required field on `services`, hold window and mandate-field open items closed; amended Session 7 — `payment_mandates` erasure carve-out specified (D-0022), `notification_deliveries.purpose` gains `rebooking_invite` (D-0023), buffer before/after scope settled (D-0024, no schema change))
+> Last updated: 2026-08-24 (Session 4 — D-0008's DDL corrected after execution testing; see amendment note near the `appointments` table; amended Session 5 — buffer made a required field on `services`, hold window and mandate-field open items closed; amended Session 7 — `payment_mandates` erasure carve-out specified (D-0022), `notification_deliveries.purpose` gains `rebooking_invite` (D-0023), buffer before/after scope settled (D-0024, no schema change); amended Session 8 — RLS policy comparison hardened with `NULLIF` after execution testing found the tenancy-boundary section's fail-closed claim was incomplete (D-0025); Laravel migrations translating this DDL now exist, no longer future-session work)
 
 This supersedes Session 0/1's stub. It implements the direction that stub
 recorded, resolved with the specifics decided in `09-decision-log.md`
@@ -76,6 +76,35 @@ platform-admin path (which revises this file's and D-0005's original
 `BYPASSRLS`-for-admin phrasing), queue-job/retry/batch behavior, and the
 unauthenticated public-booking path — is in `09-decision-log.md` D-0009 and
 `07-testing-strategy.md`'s tenant-isolation suite, not repeated here.
+
+**Amendment (Session 8, 2026-08-24) — the fail-closed comparison hardened
+with `NULLIF`, D-0025.** Execution testing against real Postgres 17.11 found
+that the "`current_setting(..., true)` returns `NULL` rather than erroring
+when unset" claim two paragraphs above is only true for a connection that
+has *never* called `set_config()` for this GUC. Once any transaction on a
+physical connection has set it — even once, even committed — the custom GUC
+is permanently defined for that connection's remaining session lifetime:
+every later transaction that doesn't set it gets `current_setting(..., true)
+= ''` (empty string), not `NULL`. Casting `''::uuid` raises `SQLSTATE 22P02`
+rather than comparing as `NULL` — under this project's own chosen PgBouncer
+transaction-mode pooling (`08-deployment-and-operations.md`), that's the
+normal state on every backend connection after its first tenant-scoped
+transaction, not a rare cold-start edge case. The corrected policy, now what
+every table below actually implements:
+
+```sql
+ALTER TABLE <table> ENABLE ROW LEVEL SECURITY;
+ALTER TABLE <table> FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON <table>
+  USING (tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid);
+```
+
+This restores the documented fail-closed-to-zero-rows behavior for real,
+rather than an unhandled exception. Full findings, the options considered,
+and why this is a hardening rather than a design reversal: `09-decision-
+log.md` D-0025. This does **not** change `set_config()`'s own call pattern
+(still parameterized, still `is_local = true`, still the first statement in
+an explicit transaction) — only the read-side comparison.
 
 ## Tables
 

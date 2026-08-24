@@ -10,6 +10,11 @@ Thumbs.db
 .env.*
 !.env.example
 !.env.*.example
+# .env.testing carries no real secrets — fixed local-only Postgres
+# passwords matching docker/postgres/init/ and a test-only APP_KEY/Stripe
+# key — committed so `composer ci:check` works the same for every clone
+# and in CI, per 07-testing-strategy.md/08-deployment-and-operations.md.
+!.env.testing
 
 # Laravel (backend — added in a future session)
 /vendor/
