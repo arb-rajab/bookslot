@@ -308,6 +308,33 @@ This belongs in `04` because below PostgreSQL 12, this schema **cannot be expres
 - **Not made this session:** the actual UI/copy prompting the owner for this value, and `05-api-contracts.md`'s `POST/PATCH /api/owner/services` request/response shapes reflecting the new required fields — `05` was not in this session's authorized scope for this ruling (only D-0008 and `04` were named); adding the fields to `05` is a small, low-risk follow-up left as an open item rather than done here without being asked.
 - **Must not be silently reversed because:** reintroducing a numeric `DEFAULT` on either `services` column would silently reopen the zero-by-inattention hazard this ruling exists to close.
 
+### Postscript (Session 6, 2026-08-24) — what this gap says about the verification, not just the fix
+
+D-0012 fixed a real bug: D-0008's "snapshotted from the service/studio's
+buffer configuration" language assumed a source column that was never
+actually added anywhere in `04-data-model.md` until this ruling supplied
+it. That means D-0008's snapshot-at-booking semantics — the actual property
+D-0008 exists to provide, that a studio changing its buffer later never
+retroactively alters an already-created booking's occupancy window — were
+unimplementable as written for four sessions (Sessions 3 through this
+gap's discovery). During that entire span, the DDL executed without error,
+the exclusion constraint behaved correctly against every case tested, and
+nothing in the process caught it.
+
+**Why not:** every test and every execution check across those sessions
+asked a version of "is the schema internally consistent" — does the DDL run,
+does the constraint reject an overlapping insert, does the containment CHECK
+hold, does `occupancy_window()` resist a hostile `search_path`. None of them
+asked "does changing a studio's buffer configuration actually leave existing
+bookings' `occupancy_range` values unchanged and give new bookings the new
+value" — the literal guarantee D-0008's own text describes as its purpose.
+A schema can be perfectly self-consistent while the specific property it was
+introduced to deliver was never exercised at all, because self-consistency
+and delivering-the-stated-property are different claims that happen to look
+identical until the second one is actually tested. See `07-testing-strategy.md`'s
+new buffer-config-change case (added Session 6) — the direct fix for this
+class of gap, not just for this one instance of it.
+
 ## D-0013 — FR-16 staff cross-visibility: own bookings only at MVP; a studio-level toggle is a Paid-tier feature
 
 - **Date:** 2026-08-24 · **Status:** accepted

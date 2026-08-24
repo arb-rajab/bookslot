@@ -1,7 +1,53 @@
 # API / Event Contracts
 > Purpose: the interface others depend on.
 > Project: bookslot (PRIVATE track)
-> Last updated: 2026-08-24 (Session 2 — Requirements and Data Model; amended Session 5 — mandate acceptance field added, FR-16 scope resolved)
+> Last updated: 2026-08-24 (Session 2 — Requirements and Data Model; amended Session 5 — mandate acceptance field added, FR-16 scope resolved; amended Session 6 — reconciled against D-0009/D-0012/D-0014, webhook coverage for the off-session balance charge clarified)
+
+## Amendment (Session 6, 2026-08-24) — reconciliation after a full contradiction audit
+
+A full audit (this session) checked this file against every decision made
+since it was written in Session 2. Findings and fixes, each a genuine gap
+found by the audit, not a cosmetic pass:
+
+- **Platform-admin endpoint row corrected.** It described the admin path as
+  "the explicit `BYPASSRLS`-equivalent path" — factually superseded by
+  D-0009 (Session 3), which revised that mechanism to tenant impersonation
+  under the ordinary `bookslot_app` role plus an app-layer check. Fixed
+  below, not left to drift further now that this file is back in scope.
+- **Service-management endpoints given a real detailed shape** for the first
+  time, reflecting D-0012's required (no-default) `buffer_before_minutes`/
+  `buffer_after_minutes` fields. **Written against both-configurable
+  (before and after) — the broader case** — because D-0008's separate,
+  still-open ruling (whether MVP restricts buffer to "after only" or allows
+  both) is not decided; see the inline flag on the new endpoint below and
+  `12-session-handoff.md` for the tracked open item. If that ruling narrows
+  scope later, this endpoint's fields don't change shape — only an added
+  validation rule (e.g., rejecting a non-zero `buffer_before_minutes`) would
+  follow, not a contract redesign.
+- **Manual re-invite endpoint (FR-23/D-0014) defined** for the first time —
+  previously a decided capability with no spec.
+- **`mandate_accepted`/`mandate_template_version` (D-0015(b)) confirmed
+  present and correct** on `POST /api/tenants/{slug}/bookings` — added
+  correctly in Session 5, carries a template version identifier as
+  required, the mandate text itself stays pending per D-0015(a). No change
+  needed here.
+- **Webhook coverage for the off-session balance charge (D-0006)
+  clarified.** The `payment_intent.succeeded`/`payment_intent.payment_failed`
+  rows already covered a `balance`-type PaymentIntent structurally (both are
+  looked up by `stripe_payment_intent_id`, not hard-coded to `deposit`), but
+  didn't say so — this was a documentation gap, not a missing webhook type
+  or a functional bug. Made explicit below, including the idempotency
+  relationship to endpoint 6's own synchronous response.
+- **One gap found, not fixed:** `POST /api/bookings/{id}/confirm-payment` is
+  a public, unauthenticated endpoint addressed only by an unscoped
+  `appointment_id`, with neither a `{slug}` (D-0009's public-path
+  mechanism) nor a signed token (D-0009's manage-booking-link mechanism) to
+  derive tenant context from before an RLS-protected lookup can run. D-0009
+  covers exactly two public-path tenant-resolution mechanisms and this
+  endpoint uses neither — the mechanism for it is genuinely unspecified,
+  not merely undocumented. Per this session's instruction not to invent a
+  missing detail in a later decision, this is raised as an open item (see
+  `12-session-handoff.md`), not resolved here.
 
 ## Amendment (Session 5, 2026-08-24) — mandate field added, staff scope resolved
 
@@ -46,6 +92,7 @@ and rate-limit numbers are still future-session work (see Deferred below).
 | `POST /api/owner/staff/{id}/availability-exceptions` | One-off blocks/holidays |
 | `POST /api/owner/customers/{id}/erasure` | FR-18 erasure request |
 | `GET /api/owner/customers/{id}/export` | FR-18 export |
+| `POST /api/owner/customers/{id}/re-invite` | FR-23/D-0014: manually re-invite a specific customer to book again — **defined Session 6**, see below |
 | `POST /api/owner/stripe/connect/onboarding-link` | Start/resume Stripe Connect Express onboarding |
 
 ### Staff (authenticated, tenant-scoped, narrower than owner)
@@ -58,7 +105,7 @@ and rate-limit numbers are still future-session work (see Deferred below).
 
 | Method & path | Purpose |
 |---|---|
-| `GET /api/admin/tenants/{id}/appointments` | Support/ops lookup, via the explicit `BYPASSRLS`-equivalent path, never the owner-facing query path |
+| `GET /api/admin/tenants/{id}/appointments` | Support/ops lookup. **Corrected, Session 6** — authenticates as the ordinary `bookslot_app` role and impersonates tenant `{id}` by setting `app.current_tenant_id` to it, gated by an app-layer check that the caller is `role = 'platform_admin'` (D-0009); never a `BYPASSRLS` role (that's reserved exclusively for `bookslot_migrator`'s offline use), and never the owner-facing query path |
 
 ## Core endpoints, detailed
 
@@ -193,12 +240,76 @@ needed since slots are derived, not materialized (per `04`).
 
 **Errors:** `422` if `date` is in the past.
 
+### 8. `POST /api/owner/services` (and `PATCH /api/owner/services/{id}`) — detailed Session 6, per D-0012
+
+**Request (`POST`, creation):**
+```json
+{
+  "name": "…",
+  "duration_minutes": 90,
+  "price_amount": 20000,
+  "currency": "usd",
+  "deposit_type": "fixed",
+  "deposit_fixed_amount": 5000,
+  "buffer_before_minutes": 0,
+  "buffer_after_minutes": 15
+}
+```
+`buffer_before_minutes` and `buffer_after_minutes` are **required with no
+default** on creation, per D-0012 — omitting either is a validation error,
+not a silent zero. **Written against both-configurable (before and after)
+deliberately** — D-0008's separate, still-open ruling on whether MVP
+restricts buffer to "after only" is not decided (see `12-session-handoff.md`);
+this endpoint doesn't anticipate that ruling's outcome by narrowing the
+shape itself. If a future ruling restricts scope, the fix is an added
+validation rule (e.g., rejecting a non-zero `buffer_before_minutes`), not a
+field removal.
+
+**Response `201`:** the created service, including both buffer fields as
+stored.
+
+**Errors:**
+- `422 { "error": "VALIDATION_FAILED", "fields": { "buffer_before_minutes": "required" } }`
+  (or `buffer_after_minutes`) — missing on creation.
+- `422` if either buffer value is negative or exceeds `1440` (mirrors `04`'s
+  `CHECK (... >= 0 AND ... <= 1440)`).
+- `422` for the pre-existing deposit-type/amount cross-field validation
+  (unchanged from Session 2).
+
+**Request (`PATCH`, update):** any subset of the above fields. Buffer
+fields are optional on update — D-0012's "required" rule applies only to
+creation, so an update that doesn't touch buffer leaves the service's
+existing values unchanged. A buffer value that *is* provided on update is
+validated by the same bounds as creation.
+
+### 9. `POST /api/owner/customers/{id}/re-invite` — detailed Session 6, per D-0014/FR-23
+
+**Request:** `{}` — no configurable fields at MVP; the action itself (send
+this specific customer a link back to the public booking page) is the
+entire intent, independent of whether their last appointment was a
+no-show (FR-23 is explicit that this isn't gated on no-show status).
+
+**Response `202`:** `{ "status": "queued", "channel": "email" }` — accepted
+for asynchronous delivery via the same notification-sending
+infrastructure as reminders, sent immediately rather than on a schedule.
+
+**Errors:** `404` unknown `customer_id` (tenant-scoped, per the owner's own
+tenant).
+
+**Not resolved by this endpoint definition — a proposed follow-up, not
+made here:** `04-data-model.md`'s `notification_deliveries.purpose` CHECK
+list only enumerates `reminder_7d, reminder_24h, reminder_2h,
+rebooking_prompt` — there is no `manual_reinvite` (or equivalent) value to
+record this send against. Defining this endpoint's request/response shape
+doesn't require deciding that column-level detail, so it isn't added here;
+`04` wasn't in this session's authorized scope. See `12-session-handoff.md`.
+
 ## Stripe webhooks consumed
 
 | Webhook | Mutates |
 |---|---|
-| `payment_intent.succeeded` | `payments.status → succeeded`; if it's a `deposit` payment, `appointments.status: pending_payment → confirmed` (idempotent against a synchronous confirmation already having done this — J9) |
-| `payment_intent.payment_failed` | `payments.status → failed`; records `failure_code` |
+| `payment_intent.succeeded` | `payments.status → succeeded`, looked up by `stripe_payment_intent_id` regardless of `type` — this already covers a `balance`-type PaymentIntent structurally, not just `deposit`, though Session 2's original wording only called out the `deposit` case explicitly (clarified Session 6). For a `deposit` payment: additionally `appointments.status: pending_payment → confirmed` (idempotent against a synchronous confirmation already having done this — J9). For a `balance` payment (D-0006's off-session charge, triggered synchronously by endpoint 6): this webhook is expected to arrive *after* endpoint 6's own synchronous response already recorded `succeeded` — it must be a no-op beyond confirming the already-recorded state, the same idempotency discipline J9 already establishes for deposits |
+| `payment_intent.payment_failed` | `payments.status → failed`; records `failure_code`. Applies to both `deposit` (J2's decline/retry path) and `balance` (J5's off-session decline, endpoint 6) payment types, by the same `stripe_payment_intent_id` lookup — idempotent against endpoint 6's synchronous failure response for the balance case, same reasoning as above (clarified Session 6) |
 | `charge.refunded` | `refunds.status → succeeded`; `payments.status → refunded`/`partially_refunded` |
 | `charge.dispute.created` / `charge.dispute.closed` | `booking_events` audit entry (dispute evidence per 06); does not itself mutate appointment/payment status — a dispute is tracked, not auto-resolved |
 | `account.updated` (Connect) | `tenants.stripe_onboarding_status` |

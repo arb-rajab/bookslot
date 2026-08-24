@@ -1,7 +1,20 @@
 # Requirements
 > Purpose: testable statements of what the system must do and how well.
 > Project: bookslot (PRIVATE track)
-> Last updated: 2026-08-24 (Session 2 — Requirements and Data Model; amended Session 5 — rulings recorded)
+> Last updated: 2026-08-24 (Session 2 — Requirements and Data Model; amended Session 5 — rulings recorded; amended Session 6 — J3/NFR-03 updated to describe D-0008's mechanism)
+
+## Amendment (Session 6, 2026-08-24) — J3 and NFR-03 updated for D-0008
+
+J3's narrative and NFR-03 described the double-booking guarantee purely in
+terms of D-0007's literal `appointment_range` overlap check, written before
+D-0008 (Session 3) moved the exclusion constraint onto the buffer-aware
+`occupancy_range` column. **The guarantee itself was never wrong or weaker**
+— D-0008 strengthened it, it didn't change what it promises — only the
+mechanism description was stale, flagged as such since Session 5's audit and
+left open pending this file being back in scope. Fixed below, not silently:
+both now describe the constraint as checking `occupancy_range` (the
+buffer-widened window), with D-0007's literal-range/half-open-bound
+reasoning still accurate as the underlying baseline.
 
 ## Amendment (Session 5, 2026-08-24) — FR-16 and J10 resolved by ruling
 
@@ -74,9 +87,14 @@ booking/payment states defined in `04-data-model.md`.
 ### J3 — Failure path: double-booking race
 1. Two customers view the same open slot and both submit a booking request
    within the same short window.
-2. Both requests attempt to insert an `appointment` row with an overlapping
-   `appointment_range` for the same `resource_id`/`tenant_id`.
-3. The database's exclusion constraint (D-0007) allows exactly one insert to
+2. Both requests attempt to insert an `appointment` row for the same
+   `staff_id`/`tenant_id` whose buffer-widened `occupancy_range` (D-0008 —
+   each service's snapshotted buffer applied to the literal
+   `appointment_range`) overlaps the other's, even in the narrower case
+   where their literal `appointment_range`s themselves overlap directly.
+3. The database's exclusion constraint (D-0007, moved onto `occupancy_range`
+   by D-0008 specifically to close the concurrent-buffer race a
+   literal-range-only check couldn't see) allows exactly one insert to
    succeed. The second request's insert raises SQLSTATE `23P01`.
 4. The API translates that into `409 Conflict` / `SLOT_ALREADY_BOOKED` for
    the losing request — never a 500 — and the frontend re-fetches available
@@ -189,7 +207,7 @@ Each is marked **MVP** or **Paid** per the split already committed in
 |---|---|---|
 | NFR-01 | The public booking page is server-side rendered with meaningful HTML at first response (not a client-rendered shell) | This is the concrete reason `03-architecture.md` chose a decoupled Nuxt frontend over Inertia — a customer reached via an Instagram bio link on mobile data bounces if the page is slow or blank-then-hydrated |
 | NFR-02 | All appointment-time arithmetic uses the tenant's stored IANA timezone with zone-aware conversion, never a fixed UTC offset | Required for DST-crossing appointments to compute correct absolute ranges (D-0007) |
-| NFR-03 | Two concurrent booking requests for an overlapping window on the same resource can never both succeed; the losing request must receive a defined, non-500 error | D-0007; this is the one correctness property `01`'s Definition of MVP-complete calls out as needing dedicated testing |
+| NFR-03 | Two concurrent booking requests on the same resource can never both succeed if their windows overlap — either their literal appointment windows overlap, or their buffer-widened occupancy windows overlap per D-0008 even when the literal windows don't; the losing request must receive a defined, non-500 error | D-0007 (literal-range exclusion) and D-0008 (the buffer-aware `occupancy_range` exclusion the constraint actually checks today, which is what closes the concurrent-buffer race a literal-range-only check couldn't see); this is the one correctness property `01`'s Definition of MVP-complete calls out as needing dedicated testing |
 | NFR-04 | Every Stripe webhook handler is idempotent under both duplicate delivery and out-of-order/late delivery | D-0006/06; required because Stripe does not guarantee exactly-once, in-order delivery |
 | NFR-05 | Cross-tenant data isolation holds even against a raw query or a queued job missing tenant context (fail closed, not fail open) | D-0005; the one genuinely new architectural risk per `06` |
 | NFR-06 | No formal uptime SLA is committed at MVP | Stated explicitly as *not yet decided*, not fabricated — there is no real pilot or paying customer yet to set an SLA against (00). Basic availability monitoring is expected; a numeric target is an open question, not an omission |

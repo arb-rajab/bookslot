@@ -354,6 +354,125 @@ none of this session's work closes or newly opens a risk register entry.
   Pack files are updated with real content, and this handoff file reflects
   the new session.
 
+## Amendment (Session 6, 2026-08-24) — 05 reconciled, missing D-0008 test added
+
+**Objective:** reconcile `05-api-contracts.md` with every decision made
+since it was written in Session 2, close the reporting gap in Session 5's
+contradiction audit (it omitted two of the checks it was asked to perform),
+and add the D-0008 invariant test that four sessions of otherwise-passing
+verification never actually exercised.
+
+**Phase 0 — completed the contradiction audit.** Session 5's table listed
+four findings but omitted the webhook-list-vs-D-0006 check and the
+02-NFRs-vs-07 check the prompt required, with no way to tell an unchecked
+item from a verified-clean one. Redone completely this session, every check
+reported with an explicit verdict (CONTRADICTS / INCOMPLETE / CLEAN):
+
+| # | Check | Verdict | Finding |
+|---|---|---|---|
+| 1 | `05`'s webhook list vs. D-0006's second (off-session balance) charge event | INCOMPLETE | No webhook *type* was missing — `payment_intent.succeeded`/`payment_intent.payment_failed` already cover a `balance`-type PaymentIntent structurally (looked up by `stripe_payment_intent_id`, not hard-coded to `deposit`) — but the table's wording only called out the `deposit` case and never stated the idempotency relationship to endpoint 6's synchronous response. Fixed. |
+| 2 | `05`'s booking-creation/payment endpoints vs. D-0006's immediate-capture PaymentIntent + `setup_future_usage` | CLEAN | `setup_future_usage`/off-session saving is a server-internal Stripe param with no reason to appear in the client-facing contract; nothing in the request/response shapes contradicts it. |
+| 3 | `05`'s error responses vs. D-0007's `23P01 → 409 SLOT_ALREADY_BOOKED` | CLEAN | Endpoint 2 documents exactly this mapping. |
+| 4 | `05`'s public booking-page endpoints vs. D-0009's unauthenticated tenant-context derivation | INCOMPLETE | Slug-based endpoints and the token-based manage-booking endpoints both match D-0009's two named mechanisms. **`POST /api/bookings/{id}/confirm-payment` matches neither** — it's public, unauthenticated, and addressed only by an unscoped `appointment_id`, with no `{slug}` and no signed token to derive tenant context from before an RLS-protected lookup. D-0009 doesn't name a third mechanism. Not fixed — raised as an open item (see below), per this session's instruction not to invent a missing detail in a later decision. |
+| 5 | `02`'s NFRs vs. everything `07` established | INCOMPLETE (NFR-03 only) | NFR-01/02/04/05/06 all have direct, matching coverage in `07`. NFR-03 cited only D-0007 (literal-range exclusion), stale since D-0008 moved the constraint onto `occupancy_range`. Fixed. |
+| 6 | `02`'s J3 narrative and NFR-03 vs. D-0008 | INCOMPLETE (confirmed, same finding as #5) | Same stale-mechanism gap Session 5 already flagged and didn't fix (scope). The underlying guarantee held throughout — D-0008 strengthened it, never weakened it. Fixed this session. |
+
+**Endpoints checked for unreachable/meaningless status, not just
+inaccuracy:** none are unreachable. Two are affected beyond wording: the
+admin endpoint's *mechanism description* is wrong (fixed, see below) and
+`/confirm-payment`'s tenant-context mechanism is genuinely unspecified (not
+fixed, raised as an open item). No endpoint was found to be obsolete.
+
+**Phase 1 — `05` reconciled**, all via dated Session 6 amendments, not
+silent edits:
+- Platform-admin endpoint row corrected to D-0009's impersonation
+  mechanism (was: stale `BYPASSRLS`-equivalent wording).
+- Service-management endpoints (`POST`/`PATCH /api/owner/services`) given
+  a real detailed shape for the first time, with D-0012's required
+  `buffer_before_minutes`/`buffer_after_minutes` fields. **Written against
+  both-configurable (the broader case)** per this session's instruction —
+  D-0008's before/after-only scope ruling stays open (see below), flagged
+  inline in `05` rather than decided.
+- Manual re-invite endpoint (FR-23/D-0014) defined:
+  `POST /api/owner/customers/{id}/re-invite`. Surfaced a real, unrelated
+  gap while defining it: `04`'s `notification_deliveries.purpose` CHECK
+  list has no value for this send type — not fixed (`04` wasn't in this
+  session's authorized scope), carried as a proposal below.
+- `mandate_accepted`/`mandate_template_version` (D-0015(b)) confirmed
+  present and correct — no change needed.
+- Webhook table's `payment_intent.succeeded`/`payment_intent.payment_failed`
+  rows clarified per finding #1 above.
+- `02`'s J3 narrative and NFR-03 rewritten to describe D-0008's
+  `occupancy_range` mechanism per findings #5/#6.
+
+**Phase 2 — the missing D-0008 invariant test.** D-0012 (Session 5) found
+that D-0008's buffer-snapshot source column had never actually existed in
+the schema until that ruling added it — D-0008's core guarantee (a
+studio's later buffer-config change never retroactively alters an
+already-created booking) was unimplementable as written for four sessions,
+undetected, because every DDL execution and test asked whether the schema
+was internally consistent, never whether it delivered that specific
+property. Added:
+- A postscript to D-0012 in `09-decision-log.md` recording this
+  observation about the verification itself, not just the fix.
+- The actual invariant test in `07-testing-strategy.md` (Concurrency and
+  slot integrity): change a service's buffer configuration, assert an
+  existing booking's `occupancy_range` is unchanged and a new booking picks
+  up the new value — the property stated directly, not inferred from
+  adjacent cases.
+- A review of `07` against D-0006, D-0009, D-0010 for decisions whose
+  stated purpose lacked a corresponding test: D-0009 reviewed clean (the
+  tenant-isolation suite already tests the actual fail-closed property, not
+  just its mechanism); D-0006 had a clear-cut gap (the balance charge must
+  reuse the mandate's exact saved payment method — added directly); D-0010
+  had a gap that is **not** clear-cut (whether customer erasure, FR-18,
+  touches that customer's `payment_mandates` rows is unspecified in `04` —
+  a data-model question, not a test-coverage one) — listed as a proposal,
+  not invented as a test.
+
+**Files touched this session:** `02-requirements.md` (J3/NFR-03),
+`05-api-contracts.md` (reconciliation, two new detailed endpoints, webhook
+clarification), `07-testing-strategy.md` (D-0008 invariant test, D-0006
+payment-method test, D-0010 gap noted), `09-decision-log.md` (D-0012
+postscript), this file. **Not touched, per this session's constraints:**
+`03`, `04`, `06`, `08`, `10`, `11`, `13`, `14` — no application code, no
+`composer.json`.
+
+**Commit:** see the repository's commit history for this session's single
+commit (`docs: reconcile API contracts with post-Session-2 decisions`);
+`git status` is clean after it.
+
+**Proposed but not made this session (listed, not acted on, per this
+session's scope-discipline instruction):**
+- `POST /api/bookings/{id}/confirm-payment`'s tenant-context derivation
+  mechanism is genuinely unspecified by D-0009 — needs a fourth ruling
+  (alongside the slug and token mechanisms D-0009 already names) on how
+  this public, unauthenticated, unscoped-ID endpoint resolves tenant
+  context before its RLS-protected lookup can run.
+- `04-data-model.md`'s `notification_deliveries.purpose` CHECK list needs a
+  value for the manual re-invite send (e.g. `manual_reinvite`) now that
+  `05` defines the endpoint that would create such a row.
+- `04-data-model.md` needs to specify whether/how a customer erasure
+  (FR-18) interacts with that customer's `payment_mandates` rows
+  (`accepted_ip`/`accepted_user_agent` are arguably personal data, and
+  D-0010 says the table is "never deleted" for dispute-evidence reasons —
+  those two facts aren't yet reconciled anywhere).
+
+**Open items, split pilot-dependent vs. needs-your-ruling (unchanged items
+carried forward from Session 5's list are not repeated in full — see that
+section above; only new items and status changes are listed here):**
+- *Needs your ruling, new this session:* the `/confirm-payment`
+  tenant-context mechanism (proposal above) and the two `04` follow-ups
+  (proposals above) — none were authorized fixes this session.
+- *Still needs your ruling, unchanged:* D-0008's before/after-only buffer
+  scope (05's new service-management endpoint is written against
+  both-configurable specifically so it doesn't presuppose an answer);
+  D-0010's mandate wording/SCA research (D-0015(a)).
+- *Still needs a pilot, unchanged:* everything Session 5 already listed
+  under that heading (slot-computation materialization, reminder-cadence
+  effectiveness, the 15-minute hold window's correctness, `08`'s hosting
+  choices).
+
 ## Paste-into-new-session context
 <!-- Self-contained block. NEVER include credentials, private URLs, customer
      data, proprietary business rules, or sensitive security details. -->
@@ -405,3 +524,37 @@ exists; R-01 remains the standing top risk, now untouched by four
 design-focused sessions in a row. See this file's "Open questions and
 risks" section above for the full current list, split explicitly into what
 needs a pilot vs. what still needs a ruling.
+
+**Session 6** closed the two named `05` gaps from Session 5's audit, redid
+that audit completely (it had silently omitted two required checks), and
+added the D-0008 invariant test that four sessions of otherwise-passing
+verification never actually exercised. The redone audit reported every
+check with an explicit verdict, not just the failures: five of six were
+CLEAN or already-known-and-fixed; the two live gaps were `05`'s stale
+`BYPASSRLS`-equivalent admin wording (fixed, now describes D-0009's
+impersonation mechanism) and `02`'s J3/NFR-03 still citing D-0007 alone
+instead of D-0008's `occupancy_range` mechanism (fixed). `05` also gained,
+for the first time, a real detailed shape for service creation (D-0012's
+required buffer fields, written against both-configurable since the
+before/after-only scope ruling is still open) and a defined manual
+re-invite endpoint (D-0014/FR-23). One genuinely new, unresolved gap
+surfaced and was **not** fixed, per this session's instruction not to
+invent missing detail in a later decision: `POST
+/api/bookings/{id}/confirm-payment` is public and unauthenticated but has
+neither a `{slug}` nor a signed token to derive tenant context from before
+its RLS-protected lookup — D-0009 names exactly two public-path mechanisms
+and this endpoint uses neither. For Phase 2, D-0012's postscript in `09`
+records a verification-methodology observation (four sessions of
+schema-consistency tests never checked whether D-0008's actual guarantee
+held), `07` gained the direct invariant test (change a buffer config, prove
+existing bookings are unaffected and new ones pick up the change) plus a
+reviewed-and-added D-0006 gap (the balance charge must reuse the mandate's
+exact saved payment method) — and a reviewed-but-not-invented D-0010 gap
+(customer erasure's interaction with `payment_mandates` retention is
+unspecified in `04`, a data-model question left as a proposal). Files
+touched: `02`, `05`, `07`, `09`, this file — `03`/`04`/`06`/`08`/`10`/`11`/
+`13`/`14` untouched, no application code. Three items now need a ruling
+that didn't before: the `/confirm-payment` tenant-context mechanism, a
+`notification_deliveries.purpose` value for the re-invite send, and the
+erasure/`payment_mandates` interaction — see this file's Session 6
+amendment above for all three as proposals, not decisions.

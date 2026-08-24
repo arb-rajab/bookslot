@@ -1,7 +1,44 @@
 # Testing Strategy
 > Purpose: what we test, at which level, and why that is sufficient.
 > Project: bookslot (PRIVATE track)
-> Last updated: 2026-08-24 (Session 4 — concurrency/slot-integrity cases added after D-0008's DDL correction; amended Session 5 — framework decided, CI gate and E2E scope settled)
+> Last updated: 2026-08-24 (Session 4 — concurrency/slot-integrity cases added after D-0008's DDL correction; amended Session 5 — framework decided, CI gate and E2E scope settled; amended Session 6 — the missing D-0008 invariant test added, plus one D-0006 gap)
+
+## Amendment (Session 6, 2026-08-24) — the D-0008 invariant test that was never written, plus a D-0006 gap
+
+D-0012 (Session 5) found that D-0008's buffer-snapshot source column had
+never actually been added to the schema — meaning D-0008's core guarantee
+(a studio's later buffer-config change never retroactively alters an
+already-created booking) was unimplementable as written for four sessions,
+undetected, because every existing test asked whether the schema was
+internally consistent and none asked whether it delivered that specific
+property. See `09-decision-log.md`'s postscript to D-0012 for the full
+reasoning. The gap in this file: the "Buffer enforcement under race" and
+"Studio changes its buffer" cases already present test *adjacent* behavior
+(concurrent buffer races; the schema's grandfathering description) but
+never state the guarantee directly as an assertion. Added below, under
+Concurrency and slot integrity.
+
+Also added: one gap from reviewing D-0006, D-0009, and D-0010 for whether
+each decision's *stated purpose* — not just its mechanics — has a
+corresponding test (full review recorded in this session's report, not
+duplicated here in full):
+- **D-0006 (off-session balance charge):** gap found and added below (the
+  balance charge must reuse the exact saved payment method from the
+  appointment's `payment_mandates` row, not a newly-collected or
+  substituted one) — clear-cut and directly testable against the faked
+  Stripe client already used at this layer.
+- **D-0009 (fail-closed tenant context):** reviewed, no gap — the existing
+  tenant-isolation suite (global-scope bypass, queue jobs without context,
+  jobs retried after a context change, cross-tenant ID guessing, admin
+  impersonation, unauthenticated public-path spoofing) already tests the
+  stated purpose directly, not just the mechanism.
+- **D-0010 (mandate evidence retention):** gap found, **not** added here —
+  whether/how a customer erasure (FR-18) interacts with that customer's
+  `payment_mandates` rows (which carry `accepted_ip`, arguably personal
+  data) is not specified anywhere in `04-data-model.md`. Writing a test for
+  this would mean inventing the interaction rather than testing a decided
+  one — left as a proposal for `04` to resolve first, not invented here.
+  See `12-session-handoff.md`.
 
 ## Amendment (Session 5, 2026-08-24) — three open questions settled by ruling
 
@@ -179,6 +216,23 @@ also why these cases sit in a distinct slower tier (see CI integration).
   neither has committed yet), both attempt to book adjacent slots that
   satisfy buffer individually but would violate it together; assert one
   succeeds and one gets `409`, never both `201`.
+- **The D-0008 invariant, stated directly (added Session 6 — the actual
+  property D-0008 exists to provide, not merely adjacent behavior):**
+  create a service with a known buffer configuration, book an appointment
+  against it (the row snapshots that buffer into its own
+  `buffer_before_minutes`/`buffer_after_minutes`), then change the
+  *service's* buffer configuration to a different value. Assert two things
+  in the same test: (1) the existing appointment's `occupancy_range` (and
+  its underlying `buffer_before_minutes`/`buffer_after_minutes`) is
+  byte-for-byte unchanged after the service's config changed — nothing
+  about updating `services.buffer_before_minutes`/`buffer_after_minutes`
+  may retroactively alter a row that already snapshotted the old value; and
+  (2) a *new* booking created against the same service after the change
+  snapshots the *new* buffer value, not the old one. This is the direct
+  regression test for the exact gap D-0012's postscript in
+  `09-decision-log.md` describes: every prior test asked whether the schema
+  was internally consistent, none asked whether this specific guarantee
+  actually held.
 
 **Amendment (Session 4, 2026-08-24) — cases added after D-0008's DDL was
 corrected by execution testing (see `09-decision-log.md`'s D-0008
@@ -312,6 +366,16 @@ assumes real Postgres, full stop.
   handling matches FR-10 exactly (a `200` with `status: failed` and
   `fallback_action: mark_paid_manually`, per `05`'s endpoint 6 — never a
   silent failure).
+- **The balance charge reuses the mandate's saved payment method (added
+  Session 6 — the actual D-0006/D-0010 guarantee, not just the decline
+  handling above):** trigger `POST /api/owner/appointments/{id}/balance/charge`
+  and assert the faked Stripe client is invoked with exactly the
+  `stripe_payment_method_id` recorded on that appointment's
+  `payment_mandates` row — not a different or newly-collected payment
+  method. This is the direct test that D-0006's "off-session" model and
+  D-0010's mandate evidence are actually wired to the same charge attempt,
+  rather than two decisions that happen to describe a consistent story
+  without anything enforcing the link between them.
 - **Refunds:** full and partial refund flows against a captured deposit,
   including the business rule that a refund can't exceed the remaining
   refundable balance — mostly faked-client feature tests, with one real
