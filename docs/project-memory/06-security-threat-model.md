@@ -1,7 +1,7 @@
 # Security and Threat Model
 > Purpose: what can go wrong, and what stops it.
 > Project: bookslot (PRIVATE track)
-> Last updated: 2026-08-23 (Session 0/1 — design-level only, no code exists yet)
+> Last updated: 2026-08-23 (Session 0/1 — design-level only, no code exists yet; amended Session 5 — migrator-credential placement)
 
 This is a design-level pass appropriate to a business-framing session, not
 a full STRIDE exercise against real code (there is none yet). A future
@@ -132,6 +132,29 @@ document — should ever contain in concrete form:
   given card scheme/region requires a formal Stripe SCA mandate flow beyond
   a strong disclosure, is real implementation-session research against
   Stripe's actual rules — not answered in this session.
+
+## Amendment (Session 5, 2026-08-24) — `bookslot_migrator` credential kept out of the automated deploy pipeline
+
+Writing `08-deployment-and-operations.md` forced a more precise look at
+D-0009's "offline, human- or CI-triggered" phrasing for `bookslot_migrator`
+(the sole `BYPASSRLS`-capable role in the system). Those two are not
+equivalent from a blast-radius standpoint: a credential sitting in a CI/CD
+pipeline's secret store is reachable by every ordinary pipeline run and
+exposed to that pipeline's own supply-chain risk (a compromised pipeline
+config, a malicious PR touching CI YAML, a compromised third-party Action) —
+a materially larger and more automatable attack surface than a credential a
+human deliberately fetches for one manual invocation. **Decided (D-0020):**
+`bookslot_migrator`'s credential is never stored as a general CI/CD secret
+reachable by ordinary pipeline runs; migrations are a deliberate,
+manually-triggered step in the release process, gated separately from the
+automatic build/deploy path. This strengthens, rather than changes, this
+file's existing "per-tenant data isolation" and admin-path controls above —
+the one `BYPASSRLS`-capable credential in the system now has a narrower,
+human-gated reach than D-0009's original phrasing guaranteed on its own. See
+D-0020 for the full reasoning and the cost this trades away (no fully
+automated merge-to-production pipeline for migration-bearing releases), and
+`08-deployment-and-operations.md`'s migration-safety section for how the
+gated step fits into the actual release sequence.
 
 ## Deferred to a future session
 

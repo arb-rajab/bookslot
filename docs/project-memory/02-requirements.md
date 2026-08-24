@@ -1,7 +1,20 @@
 # Requirements
 > Purpose: testable statements of what the system must do and how well.
 > Project: bookslot (PRIVATE track)
-> Last updated: 2026-08-24 (Session 2 — Requirements and Data Model)
+> Last updated: 2026-08-24 (Session 2 — Requirements and Data Model; amended Session 5 — rulings recorded)
+
+## Amendment (Session 5, 2026-08-24) — FR-16 and J10 resolved by ruling
+
+Two items this file carried as open since Session 2 were resolved by explicit
+ruling this session (`09-decision-log.md` D-0013, D-0014) — not fixed
+silently, recorded here per this pack's amendment convention:
+
+- **FR-16 (staff cross-visibility)** is no longer "explicitly undecided" —
+  see the updated FR-16 row and the removed "Open question needing a ruling"
+  section below. D-0013 has the full reasoning.
+- **J10 (no-show rebooking prompt)** is no longer `[UNVAL]` defaulted to "no"
+  — it's a confirmed ruling, and a new **FR-23** records the separate manual
+  re-invite capability D-0014 adds alongside it.
 
 This supersedes Session 0/1's light sketch below with the full pass that
 session deferred. It is written after — and traceable to — the three
@@ -52,9 +65,11 @@ booking/payment states defined in `04-data-model.md`.
 2. Appointment stays `pending_payment`. Customer is shown the decline reason
    Stripe returns and can retry with a different payment method against the
    *same* appointment row (not a new slot claim) while it hasn't expired.
-3. If no successful payment arrives within the hold window (see NFR —
-   concurrent booking safety), a scheduled job transitions the appointment to
-   `cancelled` (`cancelled_by = system`), releasing the slot.
+3. If no successful payment arrives within the hold window — **15 minutes,
+   a configuration value, not a hard-coded constant; see `09-decision-log.md`
+   D-0011 for why this specific number is a provisional, pilot-dependent
+   guess rather than a validated figure** — a scheduled job transitions the
+   appointment to `cancelled` (`cancelled_by = system`), releasing the slot.
 
 ### J3 — Failure path: double-booking race
 1. Two customers view the same open slot and both submit a booking request
@@ -130,10 +145,12 @@ booking/payment states defined in `04-data-model.md`.
 1. A scheduled job fires once after an appointment reaches `completed`,
    sending a rebooking message with a link back to the public booking page.
 2. This is a fire-once notification — not sent for `no_show` or `cancelled`
-   appointments (rebooking a no-show client is a studio policy decision, not
-   an automatic default) **[UNVAL — 00 doesn't state whether a no-show
-   client should still get a rebooking nudge; default here is "no" until a
-   real pilot says otherwise]**.
+   appointments. **Confirmed by ruling (Session 5, D-0014):** a no-show does
+   **not** trigger the automatic prompt, full stop — not a placeholder
+   default awaiting pilot data. An owner retains a separate, manual action
+   (FR-23) to re-invite a specific no-show customer at their own discretion,
+   so the capability to re-engage exists without an automatic system nudge
+   applied indiscriminately to every no-show.
 
 ## Functional requirements
 
@@ -157,13 +174,14 @@ Each is marked **MVP** or **Paid** per the split already committed in
 | FR-13 | Every Stripe webhook is deduped by event ID and signature-verified before any state change | J9 | MVP |
 | FR-14 | A one-time rebooking prompt is sent after a `completed` appointment, linking back to the public booking page | J10 | MVP |
 | FR-15 | Owner dashboard shows upcoming appointments, deposit/balance status per appointment, and a basic no-show count, scoped strictly to the owner's own tenant | all | MVP |
-| FR-16 | Staff can view their own upcoming bookings; whether staff can see other staff's bookings within the same studio is explicitly undecided | — | MVP (scope of *what staff can see* is an open question below, not deferred to Paid) |
+| FR-16 | Staff can view only their own upcoming bookings at MVP. A studio-level toggle to widen this to all-staff-visible is a real, named capability, not a vague future maybe — but it is **Paid tier**, not built at MVP | — | MVP default (own bookings only); the widening **toggle** is Paid — see D-0013 |
 | FR-17 | Platform admin can access cross-tenant data for support/ops purposes only through an explicit, narrow, audited path — never the same query path an owner/staff request uses | — | MVP (required by D-0005's tenancy model, even though no admin UI is in scope this session) |
 | FR-18 | A studio's customer can request export or erasure of their own personal data; erasure anonymizes the customer record in place rather than deleting historical appointment/payment rows | — | MVP (06's GDPR-erasure-equivalent requirement; see `04-data-model.md`) |
 | FR-19 | Waitlist / automatic slot-fill on cancellation | — | Paid (per `01`) |
 | FR-20 | Analytics beyond a basic no-show count (trends, revenue forecasting, busy-slot analysis) | — | Paid (per `01`) |
 | FR-21 | Custom branding / custom domain for the booking page | — | Paid (per `01`) |
 | FR-22 | Package/membership pricing (prepaid bundles) | — | Paid (per `01`) — **and schema is deliberately not designed to anticipate this; see the unvalidated-assumptions note below** |
+| FR-23 | Owner can manually re-invite a specific customer to book again (send that customer a link back to the public booking page as a deliberate, one-off action) — independent of, and available regardless of, whether that customer's last appointment was a no-show | J10 | MVP — **added Session 5, D-0014** |
 
 ## Non-functional requirements
 
@@ -199,16 +217,15 @@ settled:
   pricing model `01` lists only as a possible future paid tier, not a
   commitment.
 - **Whether a no-show customer still gets a rebooking prompt (J10):**
-  no real answer exists; defaulted to "no" as the more conservative choice,
-  explicitly open to revision.
+  resolved by ruling, Session 5 — see D-0014. No longer unvalidated.
 
-## Open question needing a ruling (not a pilot)
+## Resolved by ruling (Session 5) — no longer open
 
 - **FR-16 — staff visibility into other staff's bookings within the same
-  studio.** `02`'s original sketch flagged this as TBD. This is a product
-  decision (what an owner is comfortable with staff seeing), not something a
-  pilot's usage data would resolve — needs your ruling in a future session,
-  not deferred indefinitely.
+  studio.** Resolved: own bookings only at MVP; a widening toggle exists as
+  a named Paid-tier feature. See `09-decision-log.md` D-0013.
+- **J10 — no-show rebooking prompt default.** Resolved: no automatic prompt;
+  a manual re-invite capability (FR-23) exists instead. See D-0014.
 
 ## Data classification (sketch)
 

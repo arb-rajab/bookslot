@@ -1,7 +1,18 @@
 # API / Event Contracts
 > Purpose: the interface others depend on.
 > Project: bookslot (PRIVATE track)
-> Last updated: 2026-08-24 (Session 2 — Requirements and Data Model)
+> Last updated: 2026-08-24 (Session 2 — Requirements and Data Model; amended Session 5 — mandate acceptance field added, FR-16 scope resolved)
+
+## Amendment (Session 5, 2026-08-24) — mandate field added, staff scope resolved
+
+Two changes this session, both by explicit ruling (`09-decision-log.md`):
+
+- **`POST /api/tenants/{slug}/bookings`** (endpoint 2 below) gains
+  `mandate_accepted` and `mandate_template_version` on the request body —
+  D-0015(b). This was an open item since Session 3 (D-0010); the mandate's
+  actual wording/copy stays deferred (D-0015(a)), unaffected by this change.
+- **The staff endpoint's scope** (own bookings vs. all-staff) is resolved,
+  not open — D-0013: own bookings only at MVP, a widening toggle is Paid.
 
 This supersedes Session 0/1's stub with a sketch proving `04-data-model.md`
 is usable end to end — not a full spec. Full versioning policy, pagination,
@@ -41,7 +52,7 @@ and rate-limit numbers are still future-session work (see Deferred below).
 
 | Method & path | Purpose |
 |---|---|
-| `GET /api/staff/appointments?from=&to=` | Own upcoming bookings (FR-16 — scope of "own" vs. "all staff" is the open question in `02`/`04`) |
+| `GET /api/staff/appointments?from=&to=` | Own upcoming bookings only, at MVP — resolved, not open (FR-16, D-0013). A studio-level toggle to widen this to all-staff-visible is a named Paid-tier feature, not built here |
 
 ### Platform admin (authenticated, cross-tenant, separate role per D-0005)
 
@@ -79,9 +90,18 @@ tenant's IANA zone for this purpose).
 {
   "service_id": "…", "staff_id": "…",
   "starts_at": "2026-09-10T17:00:00Z",
-  "customer": { "name": "…", "email": "…", "phone": "…" }
+  "customer": { "name": "…", "email": "…", "phone": "…" },
+  "mandate_accepted": true,
+  "mandate_template_version": "…"
 }
 ```
+`mandate_accepted`/`mandate_template_version` — **added Session 5, D-0015(b)**.
+`mandate_accepted` must be `true` (a `422 VALIDATION_FAILED` otherwise);
+`mandate_template_version` echoes back which version of the mandate text the
+customer was shown, and is stored verbatim into
+`payment_mandates.mandate_template_version`. How the client obtains the
+mandate text/version to display before submitting — and the text's actual
+wording — is not decided here; that's the still-deferred half of D-0015(a).
 
 **Response `201`** (slot claimed, deposit PaymentIntent created):
 ```json

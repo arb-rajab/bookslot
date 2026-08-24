@@ -158,6 +158,116 @@ session — their Session 3 amendments already reflect the D-0009 lifecycle
 and mandate-evidence decisions and needed no further change for this
 session's DDL-correction scope.
 
+## Amendment (Session 5, 2026-08-24) — nine outstanding rulings recorded, deployment and operations written
+
+**Phase 0 — the missing contradiction list (a prior session was asked for
+this and did not deliver it).** Checked `02`/`05` against everything decided
+after them. Full table delivered in this session's chat output, not
+duplicated here in full; the two findings **not** resolved by this session's
+rulings (and therefore still open, carried below) are:
+
+1. **`05-api-contracts.md`'s platform-admin endpoint row still describes the
+   admin path as "the explicit `BYPASSRLS`-equivalent path."** This is
+   factually superseded by D-0009 (Session 3), which revised that mechanism
+   to tenant impersonation under the ordinary `bookslot_app` role plus an
+   app-layer `platform_admin` check — `BYPASSRLS` is reserved exclusively
+   for `bookslot_migrator`'s offline/manual use. `05`'s wording was not
+   corrected this session (none of the nine rulings covered it, and fixing
+   it wasn't authorized scope) — a real, live contradiction, severity
+   **contradicts**, left as an open item below rather than quietly fixed.
+2. **`02-requirements.md`'s J3 narrative and NFR-03 still describe the
+   double-booking guarantee purely in terms of D-0007's literal
+   `appointment_range` overlap check**, not D-0008's later, buffer-aware
+   `occupancy_range` exclusion constraint. The guarantee they describe still
+   holds today (D-0008 strengthened it, it didn't weaken it) — severity
+   **incomplete**, not contradicts — but the cited mechanism is stale. Not
+   fixed this session for the same reason as #1.
+
+Two other findings from the same audit *were* resolved as part of this
+session's rulings, not left open: `04-data-model.md`'s
+`buffer_before_minutes`/`buffer_after_minutes` `DEFAULT 0` (contradicted the
+incoming R2 ruling — fixed via D-0012) and `05`'s missing `mandate_accepted`
+field on booking creation (contradicted D-0010's requirement — fixed via
+D-0015(b)).
+
+**Phase 1 — nine rulings recorded as `09-decision-log.md` D-0011 through
+D-0019** (plus D-0020, a tenth decision this session's own Phase 2 work
+surfaced — see below), each with a genuine decision entry, options
+considered, and a "must not be silently reversed because" line, per this
+pack's convention:
+
+- **D-0011 (R1):** hold window = 15 minutes, as a configuration value, not a
+  hard-coded constant. The *number* stays pilot-dependent (see Open
+  questions below); the *mechanism* (config, not constant) is settled.
+- **D-0012 (R2, amends D-0008):** buffer has no default — `services` gains
+  required `buffer_before_minutes`/`buffer_after_minutes` columns (this also
+  closes a real gap: D-0008's snapshot mechanism referenced a "service
+  buffer configuration" that had never actually been added to the schema
+  until now). `appointments`' own buffer columns lose their `DEFAULT 0`.
+- **D-0013 (R3):** FR-16 resolved — own bookings only at MVP; a widening
+  toggle is a named Paid-tier feature, not a vague maybe.
+- **D-0014 (R4):** no-show rebooking prompt confirmed off; a new FR-23
+  records the separate manual re-invite capability.
+- **D-0015 (R5, split):** consent copy/SCA research stays deferred (a);
+  `mandate_accepted`/`mandate_template_version` added to `05`'s
+  booking-creation request now (b) — closing the Session-3-old open item.
+- **D-0016 (R6):** test framework — Pest.
+- **D-0017 (R7):** tenant-isolation suite blocking the fast gate is settled
+  (not "confirm"), with an explicit **under-60-second** runtime budget and a
+  stated escalation path (optimize → shard → move only non-core cases out)
+  if that budget is exceeded.
+- **D-0018 (R8):** the single J1 E2E smoke test is settled as the entire MVP
+  E2E scope (not "a recommendation").
+- **D-0019 (R9):** statement descriptor and dispute-disclosure copy stay
+  deferred, with a technical note recorded (Stripe's 5–22 character/charset
+  constraints on statement descriptors, and that Connect charge-type/
+  `on_behalf_of` combination determines which party's descriptor the
+  customer actually sees).
+
+**Phase 2 — `08-deployment-and-operations.md` written in full**, superseding
+Session 0/1's deferred stub: PostgreSQL 17 chosen and justified on support
+lifecycle (not novelty) against a 12-floor/17-deployed distinction already
+implied by `04`; `btree_gist` verified (not assumed) against AWS RDS,
+Supabase, and Neon, with Google Cloud SQL checked as a fourth data point;
+database-role credential placement resolved honestly — `bookslot_migrator`
+kept out of the general CI/CD secret store as a new decision (**D-0020**,
+which refines D-0009's "offline, human- or CI-triggered" phrasing into an
+explicit choice), with the automation cost this trades away stated plainly;
+PgBouncer transaction mode chosen for pooling, with **AWS RDS Proxy
+specifically flagged as incompatible** with D-0009's `set_config` pattern
+(it pins connections on any session/transaction-scoped configuration
+change, silently defeating pooling rather than breaking correctness);
+backup/restore cadence and retention proposed with the recompute-and-compare
+check wired in as a standard post-restore step covering all three cases `07`
+named as exposed; environment topology, expand/contract migration safety,
+and a "roll forward, not back" rollback policy for data-bearing migrations;
+Stripe operational surface (per-environment webhook secrets, key rotation,
+test/live separation with a boot-time assertion, pointing at `07`'s manual
+pre-launch checklist rather than duplicating it); and observability tied
+specifically to this design (`23P01` rate, RLS-policy drift re-checked in
+production, webhook delivery failures in both directions, off-session
+decline rate), plus a plain statement that `composer ci:check` doesn't exist
+yet and exactly what it must contain when it does.
+
+**`06-security-threat-model.md` gained one amendment** (not part of the nine
+rulings, but surfaced by writing `08`): recording D-0020's migrator-
+credential-placement decision as a threat-model-relevant control.
+
+Files touched this session: `09-decision-log.md` (D-0011–D-0020),
+`02-requirements.md` (FR-16, J10, new FR-23, open-questions cleanup),
+`04-data-model.md` (`services` buffer columns, `appointments` buffer
+defaults removed, open-questions cleanup), `05-api-contracts.md`
+(`mandate_accepted`/`mandate_template_version`, staff-endpoint scope),
+`06-security-threat-model.md` (D-0020 amendment),
+`07-testing-strategy.md` (framework, CI-gate budget, E2E scope settled),
+`08-deployment-and-operations.md` (written in full), this file.
+**Not touched, per this session's explicit constraints:** `10`, `11`, `13`,
+`14`. **Not touched despite being named by the Phase 0 audit, since fixing
+them wasn't covered by the nine rulings and the session was told not to fix
+findings outside the rulings:** `05`'s stale `BYPASSRLS`-equivalent admin
+wording; `02`'s J3/NFR-03 stale exclusion-constraint description — both
+carried below as open items, not silently resolved.
+
 ## Open questions and risks
 
 **Needs a real pilot to answer (not resolvable by more design work):**
@@ -168,59 +278,78 @@ session's DDL-correction scope.
 - What level of simulated concurrency beyond the correctness-proving minimum
   (two simultaneous requests) is worth a dedicated test — unknown until real
   booking traffic exists (`07`).
+- **Whether 15 minutes is actually the right `pending_payment` hold window**
+  (D-0011) — the mechanism (a configuration value) is settled; the number
+  itself is an explicit guess pending real booking-funnel data.
+- `08`'s hosting choices left open for the same reason: which of the three
+  checked providers (AWS RDS, Supabase, Neon — or Google Cloud SQL) to
+  actually use, at which region/tier; whether the proposed 7-day PITR/
+  30-day snapshot retention is enough once real tenant data exists; and
+  concrete alerting thresholds (no real traffic baseline exists yet to set
+  a meaningful number against).
 
-**Needs your ruling (not a pilot):**
-- FR-16, no-show rebooking-prompt default, and the exact hold-window
-  duration — all unchanged, carried over from Session 2.
-- Whether MVP defaults buffer to "after only" or allows both before/after
-  per service (D-0008) — schema supports either, no default chosen.
-- Exact mandate wording/copy and whether a formal Stripe SCA mandate flow is
-  required for a given card scheme/region (D-0010) — real implementation-
-  session research, not answered here.
-- **Open item, not yet made: a mandate-acceptance field on
-  `05-api-contracts.md`'s `POST /api/tenants/{slug}/bookings` request body
-  (endpoint 2 in `05`'s endpoint table).** D-0010 requires "an explicit
-  affirmative action (a checkbox) before the deposit PaymentIntent is
-  created" — the current documented request body (`service_id`, `staff_id`,
-  `starts_at`, `customer`) has no field carrying that acceptance. This was
-  flagged as an open item in `04-data-model.md`'s `payment_mandates` table
-  notes when D-0010 was written (Session 3) and is repeated here because it
-  has not moved since: `05` was explicitly out of scope for Session 3 and
-  again for this session (Session 4), so the field still does not exist in
-  the documented contract. Whoever next has `05` in scope should add it
-  (e.g. a boolean `mandate_accepted` alongside the existing request fields)
-  before that endpoint is treated as fully specified.
-- Whether an E2E browser test belongs in MVP scope at all, or is deferred
-  entirely post-pilot (`07`).
-- Confirm the tenant-isolation suite should block the fast `composer
-  ci:check` gate (recommended as non-negotiable in `07`) rather than run
-  only nightly.
-- Test framework choice (Pest vs. PHPUnit) — deliberately left open.
+**Needs your ruling (not a pilot) — genuinely still open after this
+session's nine rulings:**
+- **Still open from Session 3 (D-0008), unresolved by D-0012's "no default"
+  ruling:** whether MVP restricts buffer to "after only" (cleanup time
+  following a service) or allows both before and after per service — the
+  schema supports either; this session only decided that a value must be
+  chosen explicitly, not which scope MVP restricts it to.
+- **Still open from Session 3 (D-0010), unresolved by D-0015(a):** exact
+  mandate wording/copy, and whether a formal Stripe SCA mandate flow is
+  required for a given card scheme/region — deliberately deferred as
+  legal-adjacent implementation-session research, not this session's to
+  answer. D-0019's technical note (statement-descriptor constraints,
+  Connect charge-type/`on_behalf_of` dependency) is relevant background for
+  whoever picks this up, not a substitute for doing it.
+- **New, from this session's Phase 0 audit, not covered by any of the nine
+  rulings — carried forward, not fixed:**
+  - `05-api-contracts.md`'s platform-admin endpoint row still describes the
+    admin path as "the explicit `BYPASSRLS`-equivalent path," which D-0009
+    (Session 3) already superseded — the real mechanism is tenant
+    impersonation under the ordinary `bookslot_app` role plus an app-layer
+    check. Severity: contradicts. A small, low-risk wording fix once `05`
+    is back in scope for something.
+  - `02-requirements.md`'s J3 narrative and NFR-03 still describe the
+    double-booking guarantee purely via D-0007's literal `appointment_range`
+    overlap, not D-0008's later buffer-aware `occupancy_range` mechanism.
+    Severity: incomplete (the guarantee still holds; the described
+    mechanism is stale). A wording fix once `02` is back in scope.
+  - `05`'s owner-service-management endpoints (`POST`/`PATCH
+    /api/owner/services`) don't yet reflect D-0012's new required
+    `buffer_before_minutes`/`buffer_after_minutes` fields on `services` —
+    flagged when D-0012 was written, not fixed here since `05`'s service-
+    management endpoints weren't named in this session's authorized scope.
+  - `05`'s manual re-invite action (D-0014/FR-23) has no endpoint shape yet
+    — recorded as a decided capability, not a spec, per D-0014.
+
+None of the above blocks anything currently written; they're wording/
+completeness gaps in already-committed documents, not open design
+questions.
 
 R-01 through R-06 in `10-risk-register.md` are unchanged by this session —
-none of this session's work closes or newly opens a risk register entry;
-worth revisiting once the open-question list above accumulates further.
+none of this session's work closes or newly opens a risk register entry.
 
 ## Next recommended session
 
-- Proposed session title: **Session 4 — Pilot Discovery, or
-  Deployment/Operations (`08`)**.
-- Single objective: as in Session 2's handoff, a real candidate pilot studio
-  becoming available should take priority over further design work
-  (R-01/B-01 remain the standing top risk, untouched by two design-focused
-  sessions in a row now). Absent that, `08-deployment-and-operations.md` is
-  the natural next design-side session: it now has concrete inputs to
-  resolve against — `04`'s migration-order note on `btree_gist`/
-  `gen_random_uuid()`/`pgcrypto` version dependencies, and `09`
-  D-0009's forward constraint that hosting/pooling must preserve
-  transaction-scoped GUC isolation (PgBouncer transaction-mode is
-  compatible; anything that promotes `SET LOCAL` to session-level `SET` is
-  not).
-- Inputs required: this Project Memory Pack, particularly `04` and `09`
-  D-0008/D-0009/D-0010 from this session, and `07` for what a hosting choice
-  must not break.
-- Expected deliverables: either a real pilot discovery record, or a
-  complete `08-deployment-and-operations.md`.
+- Proposed session title: **Session 6 — Pilot Discovery, or `05`'s Remaining
+  Endpoint Gaps.**
+- Single objective: as in every prior handoff, a real candidate pilot studio
+  becoming available should take priority over further design work — R-01
+  remains the standing top risk, untouched by four design-focused sessions
+  in a row now (Sessions 2 through 5). Absent that, the natural next
+  design-side session is closing the small, named `05-api-contracts.md`
+  gaps this session's audit surfaced and didn't fix (the stale
+  `BYPASSRLS`-equivalent admin wording, the missing service-buffer fields on
+  the owner service-management endpoints, and the undefined manual
+  re-invite endpoint) — each is small and low-risk individually, but they're
+  now three separate, named, tracked gaps rather than one vague "05 needs a
+  pass" note.
+- Inputs required: this Project Memory Pack, particularly `09` D-0009/
+  D-0012/D-0013/D-0014/D-0015 for exactly what `05` needs to reflect, and
+  this file's Open Questions section above for the precise list.
+- Expected deliverables: either a real pilot discovery record, or `05`'s
+  three named gaps closed with dated amendments (not silent edits).
 - Definition of done: whichever path is taken, the relevant Project Memory
   Pack files are updated with real content, and this handoff file reflects
   the new session.
@@ -231,34 +360,48 @@ worth revisiting once the open-question list above accumulates further.
 
 `bookslot` is a private-track repository (GitHub: `arb-rajab/bookslot`) — a
 booking/deposits/no-show-protection SaaS for appointment-based small
-businesses, illustratively anchored on tattoo studios. Session 3 (this
-session) resolved three correctness gaps found in review of Session 2's
-decisions, then wrote the full testing strategy. Resolved: (1) buffer/
-turnaround time now enforced via a second, generated `occupancy_range`
-column that carries the double-booking exclusion constraint, with the
-buffer amount snapshotted per-row at booking time so a studio's later
-buffer-config change never retroactively changes an existing booking; (2)
-the RLS tenant-context GUC is set via transaction-scoped, parameterized
-`set_config(..., true)` for every request and queued job, with three named
-Postgres roles and a platform-admin path that impersonates a specific tenant
-under the ordinary app role rather than using a live `BYPASSRLS` role
-(revising D-0005's original phrasing) — so there is exactly one RLS-bypass
-surface in the system, reserved for offline migration/backfill tooling
-only, never reachable from a live request; (3) the off-session balance
-charge now has evidenced customer consent — a `payment_mandates` table
-storing the full agreed-to text (not just a template reference) plus
-IP/timestamp/user-agent/Stripe IDs, linked into the existing audit trail.
-Full details and rejected alternatives: `09-decision-log.md` D-0008/D-0009/
-D-0010. `07-testing-strategy.md` is now real, not a stub — test layers,
-a concrete tenant-isolation suite (with a manifest mechanism that fails
-loudly on a new unprotected table), concurrency/slot-integrity cases (real
-Postgres required — SQLite cannot express `tstzrange`/GIST/RLS and isn't
-used anywhere in the suite), payment-flow testing split between a faked
-Stripe client (default) and a narrower real-test-mode subtier, and a CI
-split between a fast gate and a slower nightly tier. `04` and `03`/`06`
-carry dated Session 3 amendment sections rather than silent edits, same
-discipline as Session 2. Still true: no real pilot customer, pricing, or
-production data exists; R-01 remains the standing top risk, untouched by two
-design sessions in a row. See this file's "Open questions and risks" section
-for what's newly open, several of which explicitly need your ruling rather
-than a pilot.
+businesses, illustratively anchored on tattoo studios. Session 5 (this
+session) had three parts. **First**, it delivered a contradiction audit a
+prior session had been asked for and never produced, checking `02`/`05`
+against everything decided after them — two real findings surfaced and were
+left open rather than silently fixed (`05`'s admin-endpoint text still
+describes a `BYPASSRLS`-equivalent mechanism D-0009 already replaced with
+tenant impersonation; `02`'s double-booking narrative still cites D-0007's
+literal-range check rather than D-0008's later buffer-aware
+`occupancy_range` mechanism — both are wording/completeness gaps, not live
+bugs, since the underlying system behavior is correct either way). **Second**,
+it recorded nine outstanding rulings as decision-log entries D-0011–D-0019
+(hold window = 15 minutes as a config value, not a constant; buffer has no
+default and is now a required field on `services`, closing a real gap where
+D-0008's snapshot source had never actually been added to the schema; FR-16
+staff visibility settled to own-bookings-only with a Paid-tier toggle;
+no-show rebooking confirmed off with a separate manual re-invite capability
+added as FR-23; the mandate-acceptance field split from the still-deferred
+consent-copy/SCA research and added to `05` now; Pest as the test framework;
+the tenant-isolation suite's CI-blocking status settled with a stated
+60-second runtime budget and an explicit escalation path if exceeded; the
+single J1 E2E smoke test settled as the entire MVP E2E scope; and the
+statement-descriptor/dispute-copy item kept deferred with a technical note
+on Stripe's descriptor constraints and Connect charge-type dependency).
+**Third**, it wrote `08-deployment-and-operations.md` in full: PostgreSQL 17
+chosen on support-lifecycle grounds (not the newest version, not the one
+about to go EOL); `btree_gist` verified against three real managed providers
+rather than assumed; a new decision (D-0020) keeping the sole
+`BYPASSRLS`-capable credential (`bookslot_migrator`) out of the general
+CI/CD pipeline entirely, with the automation cost stated plainly; PgBouncer
+transaction mode chosen for pooling, with AWS RDS Proxy specifically flagged
+as incompatible with this project's `set_config`-per-transaction pattern
+(it silently defeats pooling rather than breaking correctness); backup/
+restore procedure wiring in `07`'s recompute-and-compare integrity check as
+a standard post-restore step; migration safety via expand/contract and a
+roll-forward-not-back policy for data-bearing migrations; and observability
+tied specifically to this design's own failure modes rather than generic
+infrastructure monitoring. Full details and rejected alternatives:
+`09-decision-log.md` D-0011 through D-0020. Every affected document
+(`02`, `04`, `05`, `06`, `07`, plus the new `08`) carries a dated Session 5
+amendment section rather than a silent edit, same discipline as every prior
+session. Still true: no real pilot customer, pricing, or production data
+exists; R-01 remains the standing top risk, now untouched by four
+design-focused sessions in a row. See this file's "Open questions and
+risks" section above for the full current list, split explicitly into what
+needs a pilot vs. what still needs a ruling.

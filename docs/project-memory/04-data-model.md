@@ -1,7 +1,7 @@
 # Data Model
 > Purpose: the authoritative description of stored data.
 > Project: bookslot (PRIVATE track)
-> Last updated: 2026-08-24 (Session 4 — D-0008's DDL corrected after execution testing; see amendment note near the `appointments` table)
+> Last updated: 2026-08-24 (Session 4 — D-0008's DDL corrected after execution testing; see amendment note near the `appointments` table; amended Session 5 — buffer made a required field on `services`, hold window and mandate-field open items closed)
 
 This supersedes Session 0/1's stub. It implements the direction that stub
 recorded, resolved with the specifics decided in `09-decision-log.md`
@@ -146,6 +146,8 @@ unauthenticated public-booking path — is in `09-decision-log.md` D-0009 and
 | deposit_type | text | no | | `fixed` or `percentage` (CHECK) |
 | deposit_fixed_amount | integer | yes | null | Minor units; set iff `deposit_type = 'fixed'` |
 | deposit_percentage_bps | integer | yes | null | Basis points (e.g. `2000` = 20%); set iff `deposit_type = 'percentage'` |
+| buffer_before_minutes | integer | no | **none — required** | **Added Session 5, D-0012.** No default: the owner must set this explicitly when creating the service. Snapshotted onto each `appointments` row at booking-creation time (D-0008) — this column is the configuration source that snapshot was always meant to read from, which was missing until this session. `CHECK (buffer_before_minutes >= 0 AND buffer_before_minutes <= 1440)` |
+| buffer_after_minutes | integer | no | **none — required** | Same rule as above. `CHECK (buffer_after_minutes >= 0 AND buffer_after_minutes <= 1440)` |
 | is_active | boolean | no | `true` | |
 | deleted_at | timestamptz | yes | null | |
 | created_at, updated_at | timestamptz | no | `now()` | |
@@ -153,6 +155,13 @@ unauthenticated public-booking path — is in `09-decision-log.md` D-0009 and
 - CHECK: exactly one of `deposit_fixed_amount`/`deposit_percentage_bps` is
   non-null, matching `deposit_type`.
 - Index: `(tenant_id, is_active)` for the public booking page's service list.
+- **No default on either buffer column, deliberately (D-0012):** an `INSERT`
+  that omits either value fails rather than silently defaulting to zero
+  back-to-back scheduling. This does not decide whether MVP restricts buffer
+  to "after only" or allows both — that stays open (see Open questions) — a
+  studio may set either to `0` explicitly if it wants zero turnaround for a
+  given service; the point is that this is now always a deliberate choice,
+  never an inattentive omission.
 
 ### `customers`
 
@@ -217,8 +226,8 @@ unauthenticated public-booking path — is in `09-decision-log.md` D-0009 and
 | appointment_range | tstzrange | no | | See D-0007 for bounds convention and DST handling. Customer-facing — this is the literal window shown on confirmations, calendar exports, and the dashboard; buffer is never mixed into it |
 | starts_at | timestamptz | no | `GENERATED ALWAYS AS (lower(appointment_range)) STORED` | Convenience column for readable queries/indexing |
 | ends_at | timestamptz | no | `GENERATED ALWAYS AS (upper(appointment_range)) STORED` | |
-| buffer_before_minutes | integer | no | `0` | **Added Session 3, D-0008.** Snapshotted from the service/studio's buffer configuration at booking-creation time — never looked up live, so a later buffer-config change never retroactively alters an existing booking. `CHECK (buffer_before_minutes >= 0 AND buffer_before_minutes <= 1440)` — see amendment below |
-| buffer_after_minutes | integer | no | `0` | Same snapshotting rule and CHECK bounds as above |
+| buffer_before_minutes | integer | no | **none, as of Session 5 — see below** | **Added Session 3, D-0008; `DEFAULT 0` removed Session 5, D-0012.** Snapshotted from the service's (now-required, D-0012) buffer configuration at booking-creation time — never looked up live, so a later buffer-config change never retroactively alters an existing booking. Always populated explicitly by application code, never by column default. `CHECK (buffer_before_minutes >= 0 AND buffer_before_minutes <= 1440)` — see amendment below |
+| buffer_after_minutes | integer | no | **none, as of Session 5** | Same snapshotting rule and CHECK bounds as above |
 | occupancy_range | tstzrange | no | `GENERATED ALWAYS AS (occupancy_window(appointment_range, buffer_before_minutes, buffer_after_minutes)) STORED` | **Added Session 3, D-0008; expression corrected Session 4 — see amendment below.** The buffered window the exclusion constraint actually checks. Not customer-facing |
 | status | text | no | `'pending_payment'` | See Booking state machine below |
 | cancelled_by | text | yes | null | `customer, studio, system` — set only when `status = 'cancelled'` |
@@ -292,10 +301,13 @@ $$;
 -- appointments: buffer/occupancy columns and their constraints
 -- (shown here in isolation; the full table also carries every other
 -- column and CHECK listed earlier in this section)
-  buffer_before_minutes integer NOT NULL DEFAULT 0
+-- NOTE (Session 5, D-0012): DEFAULT 0 removed — buffer is always populated
+-- explicitly from the (now-required, no-default) services.buffer_*_minutes
+-- configuration at booking-creation time, never by column default.
+  buffer_before_minutes integer NOT NULL
     CONSTRAINT appointments_buffer_before_nonneg CHECK (buffer_before_minutes >= 0)
     CONSTRAINT appointments_buffer_before_max CHECK (buffer_before_minutes <= 1440),
-  buffer_after_minutes integer NOT NULL DEFAULT 0
+  buffer_after_minutes integer NOT NULL
     CONSTRAINT appointments_buffer_after_nonneg CHECK (buffer_after_minutes >= 0)
     CONSTRAINT appointments_buffer_after_max CHECK (buffer_after_minutes <= 1440),
   occupancy_range tstzrange GENERATED ALWAYS AS (
@@ -416,10 +428,12 @@ re-verified against whatever the buffer bounds happen to be at that time.
 - **Not decided here:** the exact mandate wording, and whether a given card
   scheme/region requires a formal SCA mandate flow beyond a strong
   disclosure — real implementation-session research against Stripe's actual
-  rules, not fabricated in this session. Also implies a small future
-  addition to `POST /api/tenants/{slug}/bookings` in `05-api-contracts.md`
-  (an explicit acceptance flag) — not made this session since `05` wasn't in
-  this session's amendment scope.
+  rules, not fabricated in this session; stays deferred per D-0015(a).
+- **Resolved, Session 5 (D-0015(b)):** the small addition to
+  `POST /api/tenants/{slug}/bookings` this note used to flag as outstanding
+  (an explicit acceptance flag) has been made — `05-api-contracts.md` now
+  carries `mandate_accepted` and `mandate_template_version` on that request.
+  The wording/SCA-flow research above is a separate, still-open item.
 
 ### `stripe_webhook_events` (idempotency/dedupe — not tenant-scoped; a webhook may arrive before we know which tenant it maps to)
 
@@ -686,18 +700,23 @@ questions this document and `08` each own separately.
   doesn't change the schema (already owner-configurable), but would change
   the *default* values a future session ships.
 
+**Resolved by ruling, Session 5 — no longer open:**
+- FR-16 staff cross-visibility — see D-0013.
+- J10 no-show rebooking prompt — see D-0014.
+- `pending_payment → cancelled` hold-window duration — 15 minutes, as a
+  configuration value; see D-0011. (The *number itself* stays pilot-dependent
+  per D-0011 — that residual is tracked in `12-session-handoff.md`, not here,
+  since it's a "needs a pilot" question now, not a "needs your ruling" one.)
+- Buffer default — no default, required at service creation; see D-0012.
+
 **Needs your ruling (not a pilot):**
-- FR-16 from `02-requirements.md`: whether staff can see other staff's
-  bookings within the same studio.
-- Whether a `no_show`-terminated booking should still trigger a rebooking
-  prompt (J10) — currently defaulted to "no."
-- The exact hold-window duration for `pending_payment → cancelled` (J2) —
-  a specific number of minutes needs to be chosen; not fabricated here.
-- **Added Session 3 (D-0008):** whether MVP defaults buffer to "after only"
-  (cleanup time following a service) or allows both before and after per
-  service — the schema supports either; no default value is chosen here.
-- **Added Session 3 (D-0010):** exact mandate wording/copy for the
-  off-session balance-charge disclosure, and whether a given card
-  scheme/region requires a formal Stripe SCA mandate flow beyond a strong
-  disclosure — real implementation-session research, not a pilot question
-  and not answered here.
+- **Still open from Session 3 (D-0008), unresolved by D-0012:** whether MVP
+  defaults buffer to "after only" (cleanup time following a service) or
+  allows both before and after per service — the schema supports either;
+  D-0012 only resolved *that* a value must be chosen explicitly, not *which*
+  scope (before/after/both) MVP restricts it to.
+- **Still open from Session 3 (D-0010), unresolved by D-0015:** exact mandate
+  wording/copy for the off-session balance-charge disclosure, and whether a
+  given card scheme/region requires a formal Stripe SCA mandate flow beyond a
+  strong disclosure — real implementation-session research, deferred per
+  D-0015(a), not answered here.

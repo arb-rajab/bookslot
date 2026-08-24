@@ -1,7 +1,20 @@
 # Testing Strategy
 > Purpose: what we test, at which level, and why that is sufficient.
 > Project: bookslot (PRIVATE track)
-> Last updated: 2026-08-24 (Session 4 — concurrency/slot-integrity cases added after D-0008's DDL correction)
+> Last updated: 2026-08-24 (Session 4 — concurrency/slot-integrity cases added after D-0008's DDL correction; amended Session 5 — framework decided, CI gate and E2E scope settled)
+
+## Amendment (Session 5, 2026-08-24) — three open questions settled by ruling
+
+- **Test framework: Pest** (D-0016). This document stays framework-agnostic
+  in how it describes layers and cases — naming the framework doesn't change
+  any of that — but the choice itself is no longer open.
+- **Tenant-isolation suite blocking the fast gate is settled, not awaiting
+  confirmation** (D-0017), with an explicit runtime budget (under 60 seconds)
+  and a stated response for what happens if that budget is exceeded. See the
+  CI integration section below, updated in place, and D-0017 for the full
+  reasoning.
+- **The single J1 E2E smoke test is settled as the entire MVP E2E scope**
+  (D-0018) — no longer "a recommendation, not a settled decision."
 
 This supersedes Session 0/1's deferred stub. No application code exists yet
 — everything below is expressed as test *cases* and *layers*, not test
@@ -377,12 +390,24 @@ value:
 - **In the fast gate (every commit/PR), target under ~5 minutes total:**
   static analysis, coding style, all unit tests, the feature/integration
   tests that fit inside a single rolled-back-transaction test wrapper
-  against a real (containerized) Postgres instance, and — **non-negotiably**
-  — the full tenant-isolation suite. That suite blocking merge, not just
-  running nightly, is the direct consequence of `01`'s Definition of
-  MVP-complete calling tenant isolation the one correctness property this
-  product cannot ship without; catching a regression the morning after it
-  merged is too late for this specific property.
+  against a real (containerized) Postgres instance, and — **settled, not a
+  recommendation awaiting confirmation (D-0017)** — the full tenant-isolation
+  suite, carrying its own **runtime budget of under 60 seconds** within that
+  overall 5-minute target. That suite blocking merge, not just running
+  nightly, is the direct consequence of `01`'s Definition of MVP-complete
+  calling tenant isolation the one correctness property this product cannot
+  ship without; catching a regression the morning after it merged is too
+  late for this specific property. **If the suite's runtime grows past its
+  budget:** optimize first (a shared templated test database, parallelized
+  per-table catalog checks); shard/parallelize the suite's own cases within
+  the fast gate if that isn't enough; only as a last resort, move specific
+  slow-but-non-core cases to the nightly tier — never the manifest-
+  completeness or RLS-enforcement catalog checks themselves, which are what
+  make the suite trustworthy against a new, accidentally-unprotected table.
+  A blocking suite that silently grows past its budget doesn't fail safely —
+  it gets bypassed by whoever is shipping under time pressure, which is a
+  social failure mode a stated numeric budget exists to make visible before
+  it happens. See D-0017.
 - **In a slower nightly/pre-deploy tier:** the true-concurrency DB-
   constraint tests (separate-connection, real-commit tests that can't use
   the rolled-back wrapper), the real-Stripe-test-mode payment subtier, and
@@ -424,17 +449,8 @@ whatever the overall number says:
   10-way concurrent burst on one popular slot is a realistic pattern worth a
   dedicated test) — unknown until real booking traffic exists.
 
-**Needs your ruling (not a pilot):**
-- Whether an E2E browser test belongs in MVP scope at all, given solo-
-  developer bandwidth, or whether feature-layer API tests alone are
-  considered sufficient with E2E deferred entirely to post-pilot. This
-  document currently assumes one minimal J1 smoke test exists; that's a
-  recommendation, not a settled decision.
-- Confirm the recommendation that the tenant-isolation suite blocks the fast
-  `composer ci:check` gate rather than running only in the nightly tier —
-  stated above as non-negotiable, but it does add real minutes to every
-  commit's feedback loop, so it's worth an explicit yes.
-- Test framework choice (Pest vs. PHPUnit) — deliberately not fixed this
-  session; this document is framework-agnostic and expressed in terms of
-  layers and cases, not syntax. Needs a decision in the first implementation
-  session, not urgently before then.
+**Resolved by ruling, Session 5 — no longer open:**
+- E2E scope: the single J1 smoke test is the entire MVP E2E layer — D-0018.
+- Tenant-isolation suite blocking the fast gate, with a stated runtime
+  budget — D-0017.
+- Test framework: Pest — D-0016.
