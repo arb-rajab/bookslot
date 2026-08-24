@@ -134,6 +134,62 @@ this product could be considered pilot-ready. See
 `06-security-threat-model.md` and `01-scope-and-non-goals.md`'s Definition
 of MVP complete.
 
+## Amendment (Session 2, 2026-08-24) — D1 and D3 resolved with specifics
+
+This session (`02-requirements.md`, `04-data-model.md`, `09-decision-log.md`
+D-0005/D-0006/D-0007) resolved the open decisions this file deferred. Recorded
+here as amendments so the reasoning above isn't silently superseded:
+
+- **Multi-tenancy enforcement is upgraded from app-scope-only to two layers.**
+  The "ORM-level global scopes" sentence in the Multi-tenancy section above is
+  no longer the whole picture: Postgres Row-Level Security (with `FORCE ROW
+  LEVEL SECURITY`) is added as a fail-closed database-level backstop, keyed on
+  a per-request/per-job session variable. See D-0005 in `09-decision-log.md`
+  and `04-data-model.md` for the mechanism. The risk this file flags (§
+  Multi-tenancy: the genuinely new architectural risk) is the reason for the
+  upgrade, not a reason to leave it at app-scope-only.
+- **The double-booking exclusion constraint is now fully specified,** not just
+  directionally sketched. The example DDL above (`EXCLUDE USING gist
+  (resource_id WITH =, appointment_range WITH &&)`) is superseded by the
+  tenant-scoped, partial version in D-0007 and `04-data-model.md` — the
+  original example was missing tenant scoping and the partial `WHERE` clause
+  needed to let a cancelled slot be rebooked.
+- **Deposit/payment mechanics (Stripe Connect usage in practice)** are now
+  decided: immediate-capture PaymentIntent with a saved card for the later
+  balance charge — see D-0006. This doesn't change the D-0003 account-type
+  choice (Express) above, only how PaymentIntents are used against it.
+
+## Amendment (Session 3, 2026-08-24) — RLS tenant-context lifecycle specified (D-0009)
+
+Session 2's amendment above established *that* RLS backstops app-scope
+tenancy; it didn't say *when or how* the session GUC (`app.current_tenant_id`)
+is set and cleared, which review found was a real gap: `SET LOCAL` only
+resets at `COMMIT`/`ROLLBACK`, so on a pooled or long-lived connection
+(Horizon queue workers, PgBouncer) an ambient, non-transactional `SET` would
+leak one request's or job's tenant context to whoever reuses that connection
+next. Resolved this session, in full, in `09-decision-log.md` D-0009 and
+`04-data-model.md`'s tenancy-boundary section — summarized here so this
+file's architectural picture stays current:
+
+- Every tenant-scoped HTTP request and every queued job runs inside an
+  explicit database transaction, with the GUC set via a parameterized
+  `set_config('app.current_tenant_id', ?, true)` call as its first
+  statement — never a string-interpolated `SET LOCAL`.
+- Three named Postgres roles: `bookslot_app` (the only role the running
+  application ever authenticates as; ordinary, fully RLS-subject),
+  `bookslot_migrator` (owns the tables, holds `BYPASSRLS`, used only by
+  migrations/seeders/backfills/`pg_dump` — offline/CI-triggered, never
+  request-triggered), and no third, live-request bypass role.
+- The platform-admin cross-tenant path (FR-17) does **not** use a live
+  `BYPASSRLS` role, revising this file's and D-0005's earlier
+  `BYPASSRLS`-for-admin phrasing: it authenticates as `bookslot_app` and
+  impersonates the specific tenant under an app-layer platform-admin
+  authorization check, keeping RLS fail-closed even on that path.
+- PgBouncer transaction-mode pooling is compatible and preferred (its
+  connection-reclaim boundary matches the GUC's reset boundary exactly) —
+  recorded as a forward constraint on `08-deployment-and-operations.md`'s
+  eventual hosting choice, not resolved here.
+
 ## Deferred to future sessions
 
 - Full ERD and migration design — `04-data-model.md`.
