@@ -1,7 +1,7 @@
 # Data Model
 > Purpose: the authoritative description of stored data.
 > Project: bookslot (PRIVATE track)
-> Last updated: 2026-08-24 (Session 4 — D-0008's DDL corrected after execution testing; see amendment note near the `appointments` table; amended Session 5 — buffer made a required field on `services`, hold window and mandate-field open items closed)
+> Last updated: 2026-08-24 (Session 4 — D-0008's DDL corrected after execution testing; see amendment note near the `appointments` table; amended Session 5 — buffer made a required field on `services`, hold window and mandate-field open items closed; amended Session 7 — `payment_mandates` erasure carve-out specified (D-0022), `notification_deliveries.purpose` gains `rebooking_invite` (D-0023), buffer before/after scope settled (D-0024, no schema change))
 
 This supersedes Session 0/1's stub. It implements the direction that stub
 recorded, resolved with the specifics decided in `09-decision-log.md`
@@ -421,6 +421,25 @@ re-verified against whatever the buffer bounds happen to be at that time.
   `stripe_webhook_events.payload`, so dispute evidence can be assembled from
   `booking_events` + `payment_mandates` + `stripe_webhook_events` together.
 - Never deleted — dispute evidence, same reasoning as `payments`/`refunds`.
+- **Erasure carve-out (added Session 7, D-0022):** a customer erasure
+  (FR-18) never modifies or deletes a `payment_mandates` row — every
+  column, including `accepted_ip` and `accepted_user_agent`, survives
+  exactly as recorded at accept-time. This table has no directly
+  customer-identifying column in the first place (no `customer_id`, no
+  name/email/phone — it links only via `appointment_id`); the actual
+  identifying fields erasure nulls are on `customers` (see that table's row
+  in the Soft delete matrix below, unchanged by this note).
+  `accepted_ip`/`accepted_user_agent` are classified as **evidentiary, not
+  identifying**: their only retained value is corroborating, at a future
+  Stripe dispute, that the accept-time request came from a plausible,
+  consistent session/device/geography — a forensic, dispute-defense
+  purpose distinct from `customers.name`/`email`/`phone`'s sole purpose of
+  identifying/contacting the person. This is a deliberate carve-out from
+  `06-security-threat-model.md`'s general erasure handling on a
+  legal-claims basis (mandates are dispute evidence; erasing them would
+  destroy the ability to defend a chargeback for a transaction that
+  legitimately occurred), not a conflict with it — see `06`'s Session 7
+  amendment and `09-decision-log.md` D-0022 for the full reasoning.
 - Covers only the J5 off-session balance charge. A no-show (J4) retains an
   already-captured deposit rather than initiating a new charge, so it needs
   disclosure (recorded in `mandate_text` itself) but not a separate mandate
@@ -480,7 +499,7 @@ re-verified against whatever the buffer bounds happen to be at that time.
 | id | uuid | no | `gen_random_uuid()` | |
 | tenant_id | uuid | no | | |
 | appointment_id | uuid | no | `REFERENCES appointments(id) ON DELETE RESTRICT` | |
-| purpose | text | no | | `reminder_7d, reminder_24h, reminder_2h, rebooking_prompt` (CHECK; owner-configured cadence per FR-06 means the specific reminder purposes a tenant uses are config, not a fixed enum in practice — kept as a CHECK list here since only these four are in MVP scope) |
+| purpose | text | no | | `reminder_7d, reminder_24h, reminder_2h, rebooking_prompt, rebooking_invite` (CHECK; owner-configured cadence per FR-06 means the specific reminder purposes a tenant uses are config, not a fixed enum in practice — kept as a CHECK list here since only these five are in MVP scope). `rebooking_invite` — **added Session 7, D-0023** — records the manual, owner-initiated re-invite (FR-23/D-0014), sent immediately rather than on a schedule; kept distinct from the automatic `rebooking_prompt` (J10/FR-14) so the audit trail can always tell a manual re-engagement from the automatic fire-once one |
 | channel | text | no | | `email, sms` |
 | scheduled_for | timestamptz | no | | |
 | sent_at | timestamptz | yes | null | |
@@ -623,7 +642,7 @@ here.
 | Table | Approach | Why |
 |---|---|---|
 | `tenants` | Soft delete (`deleted_at`) | Business closes account; a grace/export period precedes any real erasure, which is an orchestrated job, not a cascading `DELETE` |
-| `customers` | **Neither** — anonymize in place (`erasure_requested_at` set, PII columns nulled) | Deleting the row would either cascade-orphan `appointments` (breaking the studio's own accounting/audit history) or require `ON DELETE SET NULL`, which loses the same linkage. Anonymizing satisfies FR-18/06's erasure right for the personal-data fields specifically while preserving referential integrity and the studio's legitimate business records |
+| `customers` | **Neither** — anonymize in place (`erasure_requested_at` set, PII columns nulled) | Deleting the row would either cascade-orphan `appointments` (breaking the studio's own accounting/audit history) or require `ON DELETE SET NULL`, which loses the same linkage. Anonymizing satisfies FR-18/06's erasure right for the personal-data fields specifically while preserving referential integrity and the studio's legitimate business records. **Does not extend to `payment_mandates`** (added Session 7, D-0022) — that table is retained in full, unmodified, on a separate legal-claims basis; see its own table notes above |
 | `staff`, `services` | Soft delete (`deleted_at` / `is_active`) | Historical `appointments` reference them with `ON DELETE RESTRICT`; a departed artist or discontinued service must stay resolvable for past bookings |
 | `appointments` | **No `deleted_at` at all** — `status = 'cancelled'` *is* the release mechanism | This is exactly what D-0007's partial exclusion constraint predicate depends on; adding a separate soft-delete flag alongside `status` would create two ways to represent "this slot is free" that could drift out of sync |
 | `payments`, `refunds` | Never deleted | Immutable financial/audit ledger — required for dispute evidence (06) |
@@ -709,12 +728,14 @@ questions this document and `08` each own separately.
   since it's a "needs a pilot" question now, not a "needs your ruling" one.)
 - Buffer default — no default, required at service creation; see D-0012.
 
+**Resolved by ruling, Session 7 — no longer open:**
+- Buffer scope (before-only vs. both) — both stay configurable; no schema
+  change. See D-0024.
+- `payment_mandates` vs. customer erasure — retained in full, including
+  `accepted_ip`/`accepted_user_agent`; see D-0022 and this table's own notes
+  above.
+
 **Needs your ruling (not a pilot):**
-- **Still open from Session 3 (D-0008), unresolved by D-0012:** whether MVP
-  defaults buffer to "after only" (cleanup time following a service) or
-  allows both before and after per service — the schema supports either;
-  D-0012 only resolved *that* a value must be chosen explicitly, not *which*
-  scope (before/after/both) MVP restricts it to.
 - **Still open from Session 3 (D-0010), unresolved by D-0015:** exact mandate
   wording/copy for the off-session balance-charge disclosure, and whether a
   given card scheme/region requires a formal Stripe SCA mandate flow beyond a

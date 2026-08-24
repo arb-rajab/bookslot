@@ -525,6 +525,106 @@ design-focused sessions in a row. See this file's "Open questions and
 risks" section above for the full current list, split explicitly into what
 needs a pilot vs. what still needs a ruling.
 
+## Amendment (Session 7, 2026-08-24) — confirm-payment tenant-context gap closed, three further rulings recorded and made testable
+
+**Objective:** close the one live, exploitable gap Session 6 found and
+deliberately didn't fix (`/confirm-payment`'s missing tenant-context
+mechanism — a correctness defect on a money-carrying path, not a
+documentation gap), record three further rulings, and write the tests
+those rulings make writable.
+
+**Phase 1 — confirm-payment.** Presented the problem precisely (what the
+endpoint accepted; what happens under D-0009's fail-closed RLS both with
+app-layer scoping intact — a chicken-and-egg deadlock that fails closed for
+everyone, not just attackers — and with it bypassed — a real
+cross-tenant BOLA risk; and that `appointment_id` is a `uuid`, not
+enumerable by brute force, but never designed as a secret in the first
+place) and four options (booking-scoped token; derive from the Stripe
+PaymentIntent; authenticate the endpoint; remove it and rely on webhooks
+alone — the last explicitly checked against `05` endpoint 6's synchronous-
+response precedent, not endpoint 3's own, per the session's framing).
+Ruled: **(a) booking-scoped signed token.** Recorded as **D-0021**,
+amending D-0009: a new `payment_confirmation_token` (distinct from
+`manage_token`, least-privilege), the route changed to
+`POST /api/bookings/{token}/confirm-payment`, verification-before-context
+ordering specified, not single-use, no new storage required. D-0009's
+public-path mechanism list is now framed as "slug-based, plus a
+signed-token capability class" rather than two fixed, unrelated
+mechanisms — closing the gap by generalizing an existing mechanism, not
+inventing a third one.
+
+**Phase 2 — three further rulings recorded:**
+- **D-0022 (R10):** `payment_mandates` is retained in full after a linked
+  customer's erasure, including `accepted_ip`/`accepted_user_agent`
+  (classified as dispute-evidence, not identifying — see `04`'s table
+  notes for the per-column reasoning), on a legal-claims basis, reconciled
+  with `06` as a carve-out, not a conflict. This also closes the specific
+  gap `07`'s Session 6 amendment flagged and declined to invent an answer
+  for.
+- **D-0023 (R11):** `notification_deliveries.purpose` gains
+  `rebooking_invite`, distinct from the automatic `rebooking_prompt` — the
+  distinct value is what makes D-0014's manual-vs-automatic boundary
+  auditable from the data itself.
+- **D-0024 (R12):** buffer stays both-configurable (before and after) —
+  formally closes an item that had drifted open across three sessions
+  waiting for pilot data it never needed; no schema or contract change
+  follows, since `04`/`05` were already written against this.
+
+**Phase 3 — tests added to `07-testing-strategy.md`:** confirm-payment
+token cases (fails closed on a bad/wrong-purpose/expired token with no
+existence leak; a token is scoped to exactly one appointment by
+construction; retry/double-submit and post-confirmation idempotency); the
+D-0010 erasure test now writable given D-0022 (erase a customer, assert
+`customers` PII nulled and `payment_mandates` — including
+`accepted_ip`/`accepted_user_agent` — byte-for-byte unchanged, and still
+linkable to `booking_events`); and a new Notification coverage section
+seeded by the `rebooking_invite` case (D-0023), asserting it's never
+conflated with `rebooking_prompt`. Re-checked whether any existing `07`
+test asserted a mechanism D-0021 changed: no — the tenant-isolation
+suite's cross-tenant-ID-guessing case is scoped to authenticated
+owner/staff endpoints only, and no other section referenced
+`/confirm-payment`; nothing required invalidation.
+
+**Files touched this session:** `09-decision-log.md` (D-0021 through
+D-0024, plus short resolution pointers appended to D-0008 and D-0009),
+`05-api-contracts.md` (endpoint 2's response, endpoint 3 redesigned,
+public endpoint table row, endpoint 8's buffer-scope flag closed, endpoint
+9's `rebooking_invite` gap closed), `04-data-model.md` (`payment_mandates`
+erasure-carve-out note, `customers` cross-reference, `notification_
+deliveries.purpose` CHECK list, open-questions cleanup — no other schema
+change, per D-0021 needing none), `06-security-threat-model.md` (Session 7
+amendment reconciling both the confirm-payment fix and the erasure
+carve-out), `07-testing-strategy.md` (three new test groups), this file.
+**Not touched, per this session's explicit constraints:** `10`, `11`,
+`13`, `14`; no application code, no `composer.json`; D-0015(a) (mandate
+wording/SCA research) was not decided.
+
+**Proposed but not made this session:** nothing beyond what's already
+recorded as deferred in the decisions themselves (D-0015(a) stays
+deferred, unchanged) — this session's scope-discipline instruction was
+followed throughout; no additional follow-on changes were identified that
+weren't either made or explicitly left to a named, still-deferred item
+above.
+
+**Open items, split pilot-dependent vs. needs-your-ruling:**
+- *Needs a pilot (unchanged from Session 5/6):* slot-computation
+  materialization under real traffic; reminder-cadence effectiveness
+  (R-04); the 15-minute hold window's actual correctness (D-0011); `08`'s
+  hosting-provider/region/tier choice and PITR/retention sizing; concrete
+  alerting thresholds.
+- *Needs your ruling — only one remains:* D-0010's exact mandate
+  wording/copy and whether a formal Stripe SCA mandate flow is required
+  for a given card scheme/region (D-0015(a)) — legal-adjacent
+  implementation-session research, explicitly out of this session's scope
+  to decide. Every other "needs your ruling" item Session 6 carried
+  forward (the confirm-payment mechanism, the `notification_deliveries`
+  re-invite value, the erasure/`payment_mandates` interaction, and the
+  buffer before/after scope) is now resolved by this session's four
+  rulings.
+
+**Commit:** see the repository's commit history for this session's single
+commit; `git status` is clean after it.
+
 **Session 6** closed the two named `05` gaps from Session 5's audit, redid
 that audit completely (it had silently omitted two required checks), and
 added the D-0008 invariant test that four sessions of otherwise-passing
@@ -558,3 +658,32 @@ that didn't before: the `/confirm-payment` tenant-context mechanism, a
 `notification_deliveries.purpose` value for the re-invite send, and the
 erasure/`payment_mandates` interaction — see this file's Session 6
 amendment above for all three as proposals, not decisions.
+
+**Session 7** closed all three of those proposals plus one more the
+handoff had carried since Session 3, as four rulings. The confirm-payment
+gap (a real correctness defect: the endpoint was public, unauthenticated,
+and had no way to derive tenant context before an RLS-protected lookup —
+D-0009 named exactly two public-path mechanisms and this endpoint used
+neither) was closed as **D-0021**: a new booking-scoped, purpose-scoped
+signed `payment_confirmation_token` (distinct from `manage_token`)
+replaces the raw `appointment_id` in the endpoint's route, generalizing
+D-0009's existing token mechanism rather than adding an unrelated third
+one — no new storage needed. Three further rulings: **D-0022** — customer
+erasure never touches `payment_mandates` (including `accepted_ip`/
+`accepted_user_agent`, classified as dispute-evidence, not identifying),
+retained on a legal-claims basis, reconciled with `06` as a carve-out;
+**D-0023** — `notification_deliveries.purpose` gains `rebooking_invite`,
+kept distinct from the automatic `rebooking_prompt` so the audit trail can
+always tell a manual re-invite from a system one; **D-0024** — buffer
+stays both-configurable, formally closing an item that had drifted open
+across three sessions for no real reason (a config knob, not a validated
+policy). All three test cases these rulings make writable were added to
+`07` (confirm-payment token cases in the tenant-isolation suite; the
+now-writable D-0010 erasure test; a new `rebooking_invite` case), and `07`
+was re-checked for any test asserting a mechanism D-0021 changed — none
+found. Files touched: `09` (D-0021-D-0024), `05`, `04`, `06`, `07`, this
+file — `10`/`11`/`13`/`14` untouched, no application code, D-0015(a)
+(mandate wording/SCA research) still deliberately deferred. The only
+"needs your ruling" item left standing after this session is D-0015(a)
+itself; everything else is now either resolved or pilot-dependent — see
+this file's Session 7 amendment above for the full open-items split.

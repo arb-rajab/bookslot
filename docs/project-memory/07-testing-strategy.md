@@ -1,7 +1,27 @@
 # Testing Strategy
 > Purpose: what we test, at which level, and why that is sufficient.
 > Project: bookslot (PRIVATE track)
-> Last updated: 2026-08-24 (Session 4 — concurrency/slot-integrity cases added after D-0008's DDL correction; amended Session 5 — framework decided, CI gate and E2E scope settled; amended Session 6 — the missing D-0008 invariant test added, plus one D-0006 gap)
+> Last updated: 2026-08-24 (Session 4 — concurrency/slot-integrity cases added after D-0008's DDL correction; amended Session 5 — framework decided, CI gate and E2E scope settled; amended Session 6 — the missing D-0008 invariant test added, plus one D-0006 gap; amended Session 7 — D-0021 confirm-payment token tests, the D-0010 erasure test D-0022 made writable, and `rebooking_invite` coverage)
+
+## Amendment (Session 7, 2026-08-24) — three rulings made writable, plus a mechanism check
+
+D-0021 (confirm-payment's booking-scoped token), D-0022 (the erasure
+carve-out for `payment_mandates`), and D-0023 (`rebooking_invite`) each
+make a previously-unwritable test case writable — added in place, in the
+sections they fit (new cases in Tenant isolation suite for D-0021; a new
+case in Payment flows for D-0022; a new Notification coverage section for
+D-0023), not stacked here.
+
+**Re-check requested this session: does any existing test in this file
+assert a mechanism D-0021 changed?** No. Searched every existing case for a
+reference to `/confirm-payment` or to an unscoped-`appointment_id`-as-tenant-
+resolution mechanism: none exists. The tenant-isolation suite's
+"cross-tenant ID guessing" case is explicitly scoped to *authenticated*
+owner/staff endpoints taking a resource ID (`05`'s endpoint table minus the
+public section) — `/confirm-payment` was never a row in that generated list
+in the first place, being public and unauthenticated, so nothing there
+needs correcting. No other section mentions this endpoint. Nothing in this
+file required invalidation.
 
 ## Amendment (Session 6, 2026-08-24) — the D-0008 invariant test that was never written, plus a D-0006 gap
 
@@ -164,6 +184,32 @@ test for it.
   parameter) is served against the slug-resolved tenant, with the
   body-supplied value ignored entirely — verifies the G2 resolution's claim
   that customer-controlled input never reaches the GUC.
+- **Confirm-payment token-derived tenant context (added Session 7, D-0021):**
+  - Fails closed without a valid token: a missing, malformed, or
+    signature-tampered `payment_confirmation_token`, and a structurally
+    valid token whose `purpose` claim isn't `confirm_payment` (e.g., a
+    `manage_token` presented here) — each must return
+    `404 INVALID_OR_EXPIRED_TOKEN`, with an identical response shape across
+    all these cases (no distinguishing "bad signature" from "wrong purpose"
+    from "no such appointment" — there is no separate raw ID in the request
+    to leak an existence signal against).
+  - A token from one booking cannot confirm another: mint a valid,
+    correctly-signed token for tenant A's appointment and assert there is
+    no request field that can make it act on tenant B's (or tenant A's own
+    different) appointment — the token's embedded `appointment_id`/
+    `tenant_id` are the only source of truth for what gets read/mutated.
+  - Expired token: a token whose own `expires_at` has passed — independent
+    of whether the appointment's hold-window job has actually run yet — is
+    rejected the same way as a bad signature, proving the token's expiry is
+    a real, independent check, not merely inferred from the appointment's
+    live `status`.
+  - Retry/double-submit: the same valid token presented twice while
+    `status = pending_payment` succeeds both times with identical side
+    effects (no duplicate PaymentIntent confirmation beyond what Stripe's
+    own idempotency already handles); presented again once `confirmed`, it
+    returns an idempotent status echo, never a new mutation or a duplicate
+    confirmation email; presented again once `cancelled` (hold expired), it
+    returns `409 BOOKING_EXPIRED`, never a 500 and never a silent success.
 
 ## Concurrency and slot integrity
 
@@ -376,6 +422,20 @@ assumes real Postgres, full stop.
   D-0010's mandate evidence are actually wired to the same charge attempt,
   rather than two decisions that happen to describe a consistent story
   without anything enforcing the link between them.
+- **The D-0010 erasure test, now writable given D-0022 (added Session 7):**
+  create a customer, a booking, and its `payment_mandates` row (including
+  `accepted_ip`/`accepted_user_agent`); action FR-18 erasure on the
+  customer; assert `customers.name`/`email`/`phone` are nulled
+  (`erasure_requested_at` set) exactly as `04`'s existing erasure handling
+  already specifies, **and**, in the same test, assert every column on the
+  linked `payment_mandates` row — including `accepted_ip` and
+  `accepted_user_agent` specifically, per D-0022's classification of both
+  as evidentiary rather than identifying — is byte-for-byte unchanged.
+  Assert the mandate remains linkable via `appointment_id` to its
+  `booking_events` audit trail (the `mandate_accepted` event and its
+  `metadata` reference), so a dispute could still be reconstructed from
+  `booking_events` + `payment_mandates` + `stripe_webhook_events` together,
+  unaffected by the customer's erasure.
 - **Refunds:** full and partial refund flows against a captured deposit,
   including the business rule that a refund can't exceed the remaining
   refundable balance — mostly faked-client feature tests, with one real
@@ -404,6 +464,24 @@ a real Stripe test-mode Connect account, not merely coded") — it should be
 walked through by hand against a real Stripe test-mode Connect account
 before any real pilot goes live, and is a natural candidate to live
 alongside `08-deployment-and-operations.md` once that file is written.
+
+## Notification coverage (added Session 7)
+
+No dedicated `notification_deliveries` test section existed before this
+session; this is its first concrete case, seeded by D-0023's new
+`rebooking_invite` purpose value:
+
+- **Manual re-invite records a distinct purpose:** trigger
+  `POST /api/owner/customers/{id}/re-invite` (FR-23) for a customer whose
+  most recent appointment was a `no_show` — assert it succeeds (FR-23 is
+  explicit this isn't gated on no-show status) and creates a
+  `notification_deliveries` row with `purpose = 'rebooking_invite'`,
+  `channel = 'email'`, sent immediately rather than scheduled. In the same
+  test, assert a `completed` appointment's automatic fire-once prompt (J10)
+  is recorded as `purpose = 'rebooking_prompt'` — the two values must never
+  be conflated, since D-0014's entire point was keeping "manual, owner
+  judgment" distinguishable from "automatic, system-triggered" in the data
+  itself, not merely in product behavior.
 
 ## Time and timezone
 

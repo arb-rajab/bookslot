@@ -1,7 +1,40 @@
 # Security and Threat Model
 > Purpose: what can go wrong, and what stops it.
 > Project: bookslot (PRIVATE track)
-> Last updated: 2026-08-23 (Session 0/1 — design-level only, no code exists yet; amended Session 5 — migrator-credential placement)
+> Last updated: 2026-08-23 (Session 0/1 — design-level only, no code exists yet; amended Session 5 — migrator-credential placement; amended Session 7 — confirm-payment tenant-context fix and an erasure/dispute-evidence carve-out)
+
+## Amendment (Session 7, 2026-08-24) — a real gap closed, and a deliberate carve-out reconciled
+
+- **A genuinely exploitable gap, not just a documentation one, closed.**
+  `POST /api/bookings/{id}/confirm-payment` was public, unauthenticated, and
+  addressed only by a bare `appointment_id`, with no way to derive tenant
+  context before its RLS-protected lookup — D-0009 named exactly two
+  public-path mechanisms and this endpoint matched neither. Left as-is, an
+  honest implementation deadlocks (fails closed for everyone, since no
+  input can safely set the tenant GUC); the realistic "fix" an implementer
+  reaches for — resolving `tenant_id` from `appointment_id` via an unscoped
+  lookup — either reopens the live `BYPASSRLS` exposure D-0020 exists to
+  prevent, or lets anyone holding a real (disclosed, not brute-forced —
+  `04` already uses `uuid`) `appointment_id` query and interact with
+  another tenant's booking/payment state, a Broken Object Level
+  Authorization defect on a money-carrying path. Resolved via D-0021: the
+  endpoint is redesigned around a booking-scoped, purpose-scoped signed
+  token that carries tenant context itself, generalizing D-0009's existing
+  token mechanism rather than adding an unrelated third one. This directly
+  strengthens this file's "per-tenant data isolation" control, the same way
+  D-0009 and D-0020 already have, by removing the one public endpoint that
+  had no defined mechanism at all.
+- **The erasure carve-out for `payment_mandates` (D-0022) is reconciled with
+  this file's GDPR-erasure-equivalent control, not a silent exception to
+  it.** That control is about a studio's end customer's identifying data;
+  it was never meant to reach evidence of an already-completed, legitimate
+  transaction retained on an independent legal-claims basis (dispute/
+  chargeback defense). `payment_mandates` — including `accepted_ip`/
+  `accepted_user_agent`, classified as dispute-evidence, not identifying
+  data — is retained in full after erasure; `customers.name`/`email`/
+  `phone` continue to be nulled exactly as before. See `04-data-model.md`'s
+  `payment_mandates` notes and `09-decision-log.md` D-0022 for the full
+  per-column reasoning.
 
 This is a design-level pass appropriate to a business-framing session, not
 a full STRIDE exercise against real code (there is none yet). A future

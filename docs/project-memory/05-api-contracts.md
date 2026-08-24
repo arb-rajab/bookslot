@@ -1,7 +1,24 @@
 # API / Event Contracts
 > Purpose: the interface others depend on.
 > Project: bookslot (PRIVATE track)
-> Last updated: 2026-08-24 (Session 2 — Requirements and Data Model; amended Session 5 — mandate acceptance field added, FR-16 scope resolved; amended Session 6 — reconciled against D-0009/D-0012/D-0014, webhook coverage for the off-session balance charge clarified)
+> Last updated: 2026-08-24 (Session 2 — Requirements and Data Model; amended Session 5 — mandate acceptance field added, FR-16 scope resolved; amended Session 6 — reconciled against D-0009/D-0012/D-0014, webhook coverage for the off-session balance charge clarified; amended Session 7 — endpoint 3 redesigned around D-0021's booking-scoped token, closing the tenant-context gap Session 6 raised and didn't fix)
+
+## Amendment (Session 7, 2026-08-24) — confirm-payment's tenant-context gap closed (D-0021)
+
+Session 6 found, and deliberately did not fix, that `POST
+/api/bookings/{id}/confirm-payment` had no way to derive tenant context
+before its RLS-protected lookup — it matched neither of D-0009's two named
+public-path mechanisms. Resolved this session as **D-0021**: the endpoint's
+route and mechanism are redesigned around a new, purpose-scoped signed
+token (`payment_confirmation_token`), generalizing D-0009's existing
+token-based mechanism rather than inventing a third one. See endpoint 2 and
+endpoint 3 below for the updated contract, and `09-decision-log.md` D-0021
+for the full reasoning, rejected alternatives, and why this needed no
+`04-data-model.md` change. Also this session: D-0024 formally settles the
+buffer before/after-scope question endpoint 8 below had flagged as still
+open (no contract change follows); D-0023 adds the `rebooking_invite`
+`notification_deliveries.purpose` value endpoint 9 below had flagged as
+missing.
 
 ## Amendment (Session 6, 2026-08-24) — reconciliation after a full contradiction audit
 
@@ -73,7 +90,7 @@ and rate-limit numbers are still future-session work (see Deferred below).
 | `GET /api/tenants/{slug}/services` | List active services for a studio | J1 |
 | `GET /api/tenants/{slug}/availability?service_id=&staff_id=&from=&to=` | Computed bookable slots (derived, per `04`) | J1, FR-02 |
 | `POST /api/tenants/{slug}/bookings` | Create a `pending_payment` appointment (claims the slot) | J1, J3 |
-| `POST /api/bookings/{id}/confirm-payment` | Confirm/retry the deposit PaymentIntent for an existing `pending_payment` booking | J1, J2 |
+| `POST /api/bookings/{token}/confirm-payment` | Confirm/retry the deposit PaymentIntent for an existing `pending_payment` booking, keyed by the booking-scoped `payment_confirmation_token` (D-0021) — **not** a raw `appointment_id`, see endpoint 3 below | J1, J2 |
 | `GET /api/bookings/manage/{token}` | Look up a booking via the signed manage-booking link (no login) | J1, J7 |
 | `POST /api/bookings/manage/{token}/cancel` | Customer-initiated cancellation | J7 |
 
@@ -156,12 +173,17 @@ wording — is not decided here; that's the still-deferred half of D-0015(a).
   "appointment_id": "…",
   "status": "pending_payment",
   "deposit": { "amount": 5000, "currency": "usd", "client_secret": "pi_…_secret_…" },
-  "manage_token": "…"
+  "manage_token": "…",
+  "payment_confirmation_token": "…"
 }
 ```
 `client_secret` is handed to the frontend to complete payment via Stripe's
 Payment Element — the server never sees card data (06's PCI scope
-minimization).
+minimization). `payment_confirmation_token` — **added Session 7, D-0021** —
+is a distinct, single-purpose signed token the client uses only to call
+endpoint 3 below; it is deliberately not the same value as `manage_token`
+(least privilege: a leaked manage-booking link must not also grant the
+ability to drive payment confirmation/retry).
 
 **Errors:**
 - `409 { "error": "SLOT_ALREADY_BOOKED" }` — the exclusion constraint
@@ -170,20 +192,49 @@ minimization).
 - `422 { "error": "VALIDATION_FAILED", "fields": {...} }` — bad input.
 - `404` unknown `slug`/`service_id`/`staff_id`.
 
-### 3. `POST /api/bookings/{id}/confirm-payment`
+### 3. `POST /api/bookings/{token}/confirm-payment` — redesigned Session 7, D-0021
 
 Used both for the initial payment attempt (if not resolved synchronously by
-step 2's client_secret flow) and for a retry after a decline (J2).
+step 2's client_secret flow) and for a retry after a decline (J2). **The
+path parameter is `payment_confirmation_token` from endpoint 2's response,
+not a raw `appointment_id`** — Session 6's audit found this endpoint had no
+mechanism to derive tenant context from a bare ID before its RLS-protected
+lookup; D-0021 closes that gap by making the token itself the sole
+identifier and the carrier of tenant context.
+
+**Request:** no body — the token in the path is the entire input.
+
+**Mechanism (D-0021), in order:**
+1. Verify the token's signature, `purpose` (must be `confirm_payment`), and
+   `expires_at` before anything else. Any failure here (bad signature,
+   wrong purpose — e.g. a `manage_token` presented here — or expired) is
+   rejected as `404 { "error": "INVALID_OR_EXPIRED_TOKEN" }`, which reveals
+   nothing about whether any appointment exists, since there is no separate
+   raw ID in the request to leak against.
+2. Only once verified, set the request's tenant context from the token's
+   own signed `tenant_id` — never from any other input.
+3. Perform the RLS-protected read/write against the token's
+   `appointment_id`.
+
+**Not single-use:** valid for repeated calls while the appointment's
+`status = pending_payment` (supports retrying with a different card, per
+J2). Once the appointment leaves `pending_payment`, further calls with the
+same token are idempotent — they return the current state, never a new
+mutation or a duplicate confirmation email (same idempotency discipline as
+J9's webhook handling).
 
 **Response `200`:** `{ "status": "confirmed" }` on success, or
 `{ "status": "pending_payment", "last_payment_error": { "code": "card_declined", "message": "…" } }`
 on a synchronous decline — the customer sees this and can retry with a
-different card, per J2.
+different card, per J2, using the same token again.
 
-**Errors:** `409 { "error": "BOOKING_EXPIRED" }` if the hold window already
-lapsed and a scheduled job already moved the appointment to `cancelled` —
-distinct from `SLOT_ALREADY_BOOKED`, since this is "your own hold expired,"
-not "someone else won the race."
+**Errors:**
+- `404 { "error": "INVALID_OR_EXPIRED_TOKEN" }` — bad signature, wrong
+  `purpose`, or the token's own `expires_at` has passed (D-0021).
+- `409 { "error": "BOOKING_EXPIRED" }` — the token is otherwise valid, but
+  the hold window already lapsed and a scheduled job already moved the
+  appointment to `cancelled` — distinct from `SLOT_ALREADY_BOOKED`, since
+  this is "your own hold expired," not "someone else won the race."
 
 ### 4. `PATCH /api/owner/appointments/{id}/status`
 
@@ -257,13 +308,11 @@ needed since slots are derived, not materialized (per `04`).
 ```
 `buffer_before_minutes` and `buffer_after_minutes` are **required with no
 default** on creation, per D-0012 — omitting either is a validation error,
-not a silent zero. **Written against both-configurable (before and after)
-deliberately** — D-0008's separate, still-open ruling on whether MVP
-restricts buffer to "after only" is not decided (see `12-session-handoff.md`);
-this endpoint doesn't anticipate that ruling's outcome by narrowing the
-shape itself. If a future ruling restricts scope, the fix is an added
-validation rule (e.g., rejecting a non-zero `buffer_before_minutes`), not a
-field removal.
+not a silent zero. **Both-configurable (before and after) is now settled,
+not provisional** — D-0008's separate ruling on whether MVP restricts
+buffer to "after only" was resolved by D-0024 (Session 7): both stay
+configurable, confirming this endpoint's shape as originally written rather
+than changing it.
 
 **Response `201`:** the created service, including both buffer fields as
 stored.
@@ -296,13 +345,12 @@ infrastructure as reminders, sent immediately rather than on a schedule.
 **Errors:** `404` unknown `customer_id` (tenant-scoped, per the owner's own
 tenant).
 
-**Not resolved by this endpoint definition — a proposed follow-up, not
-made here:** `04-data-model.md`'s `notification_deliveries.purpose` CHECK
-list only enumerates `reminder_7d, reminder_24h, reminder_2h,
-rebooking_prompt` — there is no `manual_reinvite` (or equivalent) value to
-record this send against. Defining this endpoint's request/response shape
-doesn't require deciding that column-level detail, so it isn't added here;
-`04` wasn't in this session's authorized scope. See `12-session-handoff.md`.
+**Resolved, Session 7 (D-0023):** `04-data-model.md`'s
+`notification_deliveries.purpose` CHECK list now includes `rebooking_invite`
+as its own distinct value (separate from the automatic `rebooking_prompt`),
+closing the gap this endpoint's original definition (Session 6) flagged but
+didn't fix. This endpoint's send is recorded with `purpose =
+'rebooking_invite'`.
 
 ## Stripe webhooks consumed
 
