@@ -9,9 +9,13 @@
   appointment-based service businesses (illustrative vertical: tattoo
   studios — see `00-project-brief.md`)
 - Current version or branch: `main`, no tags. Application code exists as of
-  Session 8: Laravel API scaffold, database schema/migrations, tenant-context
-  plumbing, and the tenant-isolation test suite — no controllers, routes,
-  Stripe integration, or frontend yet. See the Session 8 amendment below.
+  Session 9: Laravel API scaffold, database schema/migrations, tenant-context
+  plumbing wired into a real HTTP request lifecycle for its two fully-
+  specified public mechanisms (slug-based; the D-0021 signed-token class),
+  the tenant-isolation test suite, and the first three controllers/routes.
+  No authenticated (owner/staff/platform-admin) routes, no booking creation,
+  no Stripe integration, no frontend yet — see the Session 9 amendment
+  below for exactly why each is blocked rather than simply undone.
 
 ## Session completed
 - Session number and title: **Session 3 — Gap Resolution and Testing
@@ -874,29 +878,89 @@ exactly as `04`/`07`/`09` describe.
   token), no controllers, no routes, no Stripe, no frontend — all
   explicitly out of this session's scope per its own hard boundary.
 
+## Amendment (Session 9, 2026-08-24) — two verification gaps closed, real tenant resolution wired, first controllers built
+
+**Objective:** close the two open verification gaps Session 8's handoff left (malformed/non-existent GUC values; an application-layer scope guard), then wire `SetTenantContext` into a real HTTP request lifecycle and build the first controllers behind it — the point being that the isolation guarantee now applies to actual traffic, not just to `TenantContext::run()` calls in tests.
+
+**Phase 1 — two verification gaps, closed by execution.**
+
+- **V1 (malformed/non-existent/cross-tenant GUC values), executed against real PostgreSQL 17.11** (`tests/TenantIsolation/GucValueEdgeCasesTest.php`): a non-uuid GUC value **throws** (`QueryException`/`22P02`), never returns zero rows silently; a well-formed uuid for a tenant that doesn't exist returns **zero rows, no error**; a well-formed uuid for a real, different tenant (the actual cross-tenant case) also returns **zero rows, no error** — distinguished from the previous case only by *why* it's empty, not by mechanism. Full literal results and the "no defensive code added, since the malformed case is unreachable via any path this session wires" reasoning: `07-testing-strategy.md`'s Session 9 amendment.
+- **V2 (application-layer scope guard)** (`tests/TenantIsolation/ModelScopeGuardTest.php`): every Eloquent model backed by a manifest table must use `BelongsToTenant` (or, for `User`, register `UserTenantScope`) — parameterized over the live `app/Models` directory, same discipline as `RlsManifestTest`. **Demonstrated actually failing**, the same way the RLS manifest guard was demonstrated in Session 8: added a throwaway `App\Models\UnprotectedDemoModel` pointed at `services` without the trait, watched the test fail with an exact, useful message naming the class and table, deleted it, confirmed clean. Also recorded in `07`: PHPStan/Larastan is at level 5, no static-analysis level (including the highest available) can catch a model missing a trait — that's a behavioral contract, not a type error — so raising the level is named as a separate, unstarted item, not proposed as a fix for this gap.
+
+**Phase 2 — `SetTenantContext` wired into a real request lifecycle.** Per D-0009, exactly two public-path tenant-resolution mechanisms are fully specified without inventing anything: **slug-based** (`App\Http\Middleware\ResolveTenantFromSlug` — looks up `Tenant::where('slug', ...)->whereNull('deleted_at')`, `404 { "error": "NOT_FOUND" }` on failure) and the **signed-token capability class** generalized by D-0021 (`App\Http\Middleware\ResolveTenantFromSignedToken`, backed by the new `App\Tenancy\SignedTenantToken` — D-0026 — built this session since no prior session had implemented it: a JSON payload encrypted via Laravel's own `Crypt` facade, base64url-wrapped for safe use as a URL path segment; `404 { "error": "INVALID_OR_EXPIRED_TOKEN" }` on any bad signature, wrong purpose, or expiry, identically, per D-0021). Both resolvers run before `tenant.context` (`App\Http\Middleware\SetTenantContext`, unchanged from Session 8) in every route's middleware list; neither ever calls `$next()` on failure, so `SetTenantContext`'s own fail-closed check (throws if `tenant_id` was never set) is structurally unreachable via these paths rather than merely untested.
+
+**The authenticated owner/staff path and the platform-admin impersonation path are not wired — raised, not built.** `05-api-contracts.md`'s own Deferred section already states auth token mechanics (session vs. API token) for these actors are undecided; this session confirmed, while trying to build them, that this blocks the *controllers* themselves, not just an auth detail within them — resolving a tenant from `$request->user()->tenant_id` presupposes an authenticated user existing at all. **Intended relative ordering, once that ruling is made** (documented in `bootstrap/app.php`'s middleware-alias comment, not built): `auth:*` → a future `resolve.tenant.from-user` (reads the authenticated user's own `tenant_id`) → `tenant.context` → controller; for the platform-admin path: `auth:*` → an app-layer `role = 'platform_admin'` check → resolve `tenant_id` from the route's own `{id}` (impersonation, per D-0009) → `tenant.context` → controller. Auth must precede resolution here (unlike the public paths, which need no auth at all) because the tenant being resolved *is* a property of who's authenticated.
+
+**Platform-admin auditing — also not built, and one related, previously-unnoticed gap found while thinking it through:** `04-data-model.md`'s `booking_events.actor_type` CHECK list is `owner, staff, customer, system, webhook` — it has no `platform_admin` value. Whoever builds the admin impersonation path will need one (or a separate audit mechanism) to satisfy D-0009's "how it is audited" requirement; not fixed here since it's a `04` change outside this session's actual build, and speculative schema changes for an unbuilt path are exactly the kind of invention this session was told to avoid. Flagged here so it isn't rediscovered from scratch.
+
+**Transaction boundary — stated plainly, not silently picked.** Every route built this session is pure-DB, so `SetTenantContext`'s existing whole-request-transaction shape (D-0009, unchanged) is correct and exercised as documented: yes, every tenant-scoped request wired this session runs entirely inside one transaction. This becomes the wrong shape the moment a future controller must call Stripe mid-request (the still-unbuilt booking-creation endpoint) — holding a DB transaction open across an external HTTP call works against this project's own chosen PgBouncer transaction-mode pooling, holds the `appointments` exclusion index's locks for the call's duration, and couples DB commit to Stripe's success/failure in a way that's easy to get wrong. Recorded as **D-0027** (`09-decision-log.md`, status: *raised, not decided*) with a proposed boundary (multiple short, explicit `TenantContext::run()` calls around the external call, rather than one blanket wrap) — not built, since no Stripe-touching controller exists this session to build it against, and deciding it without one risks the same "designed but never executed" gap this project's own history (D-0012's postscript) is alert to.
+
+**Fail-closed behavior, concretely, per 05's Session 9 amendment:** an unresolvable slug (never existed or soft-deleted) → `404 { "error": "NOT_FOUND" }`; an invalid/wrong-purpose/expired token → `404 { "error": "INVALID_OR_EXPIRED_TOKEN" }` — both shapes are constant regardless of *why* resolution failed, so neither leaks whether a tenant or booking exists.
+
+**Phase 3 — first controllers, and why these.** `App\Http\Controllers\Api\ServiceController` (`GET /api/tenants/{slug}/services` — the slug mechanism, a pure read, FR-01), `ManageBookingController` (`GET /api/bookings/manage/{token}` — the `manage_booking` instance of the signed-token mechanism, a pure read), and `PaymentConfirmationController` (`POST /api/bookings/{token}/confirm-payment` — the `confirm_payment` instance, D-0021, a mutation with idempotency and a `409` case). Together these are the minimum set that exercises both of this session's two buildable mechanisms, including both named token *purposes* (proving the one token class actually generalizes across them, not just in the decision log), plus one read and one mutation. **`POST /api/tenants/{slug}/bookings` (booking creation) was deliberately not built** — see `05`'s Session 9 amendment for the mandate-contract gap this surfaced (no field in the documented request carries `payment_mandates.mandate_text` itself, and D-0015(a)'s wording is still deferred) — building it would have meant inventing either a contract field `05` doesn't have or placeholder legal/dispute-evidentiary content, both outside this session's mandate. **The user was asked and chose to skip it** rather than build it with a flagged placeholder. No Stripe call exists anywhere this session; `PaymentConfirmationController` stubs the confirmation itself (a `pending_payment` appointment is simply moved to `confirmed`) at exactly the boundary a real Stripe integration would replace, per this session's "stub at the boundary" instruction — since booking creation (the only realistic source of a `pending_payment` appointment) wasn't built either, tests seed one directly via `Tests\Support\BookingFixture`.
+
+**Tests:** `tests/Feature/Api/` (new directory) — `ServicesControllerTest`, `ManageBookingControllerTest`, `PaymentConfirmationControllerTest`, `SequentialRequestTenantContextTest`. Full case list: `07-testing-strategy.md`'s Session 9 amendment. Notably includes the D-0025 condition exercised through real, sequential HTTP requests (not `TenantContext::run()` directly) — Pest's Feature client runs entirely in-process, so this genuinely reuses one physical connection across requests, the exact PgBouncer transaction-mode condition D-0025 describes.
+
+**A real, unrelated fix needed along the way:** PHPStan/Larastan (level 5) can't resolve `$this` inside a Pest `test()` closure to `Tests\TestCase` (it infers `Pest\PendingCalls\TestCall`, which has no `getJson`/`postJson`) — neither `pestphp/pest` nor `larastan/larastan` ships a static-analysis extension for Pest's runtime `$this`-rebinding, confirmed by inspecting both packages' actual PHPStan integration code. Fixed at the real cause, not suppressed: every Feature test uses Pest's own documented `Pest\Laravel\getJson()`/`postJson()` global functions (which ship a proper `@return TestResponse` type) instead of `$this->getJson()`/`$this->postJson()`. No `@phpstan-ignore`, no baseline entry, no inline `@var` override.
+
+**Phase 5 — commit and verification.** `composer ci:check` exits 0: Pint clean, PHPStan (Larastan level 5) 0 errors, **37/37 Pest tests passing, 253 assertions**, ~10 seconds wall-clock for the whole gate; `composer test:tenant-isolation` alone (24 tests now, up from 16) runs in ~5.8 seconds — both comfortably under D-0017's budgets. `git status` clean after the commit (SHA in this session's report/commit history).
+
+**What is now verified on the real request path vs. still plumbing-only:**
+
+| Layer | Session 8 | This session |
+|---|---|---|
+| RLS + app-layer scope hold against a raw query/job with no HTTP request involved | Verified (`TenantContext::run()` direct) | Unchanged |
+| GUC behavior under malformed/non-existent/cross-tenant values | Not tested | **Verified by execution** |
+| Every tenant-scoped model actually uses the app-layer scope | Not tested (RLS-only guard existed) | **Verified, demonstrated failing and passing** |
+| A real HTTP request resolves its own tenant and only its own tenant's data, for the slug mechanism | Did not exist | **Verified** (`ServicesControllerTest`) |
+| A real HTTP request resolves tenant context from a signed, purpose-scoped token, fails closed on any tamper/wrong-purpose/expiry | Did not exist | **Verified**, both named purposes (`ManageBookingControllerTest`, `PaymentConfirmationControllerTest`) |
+| Context resets correctly across sequential real requests reusing one physical connection (the D-0025 condition) | Verified only via direct `TenantContext::run()` calls in one test | **Verified via real, sequential HTTP requests** (`SequentialRequestTenantContextTest`) |
+| Authenticated owner/staff/platform-admin request resolution | Did not exist | **Still does not exist — blocked on the auth-mechanism ruling, not attempted** |
+| Booking creation, the exclusion constraint's `23P01 → 409` mapping over a real HTTP request | Did not exist | **Still does not exist — blocked on the mandate-contract gap, not attempted** |
+| `07`'s Concurrency and slot integrity section (true multi-connection races, `'[)'` boundary cases, DST fixtures) | Not covered | **Still not covered** — needs booking creation to exist first, per Session 8's own note |
+
+**Files touched this session:** `app/Tenancy/SignedTenantToken.php`, `app/Tenancy/InvalidTenantTokenException.php`, `app/Http/Middleware/ResolveTenantFromSlug.php`, `app/Http/Middleware/ResolveTenantFromSignedToken.php`, `app/Http/Controllers/Api/{ServiceController,ManageBookingController,PaymentConfirmationController}.php`, `routes/api.php` (new), `routes/web.php` (comment only), `bootstrap/app.php` (routing + middleware aliases), `tests/TenantIsolation/{GucValueEdgeCasesTest,ModelScopeGuardTest}.php`, `tests/Feature/Api/*` (new), `tests/Support/BookingFixture.php` (new). Project-memory files: `07-testing-strategy.md`, `05-api-contracts.md`, `09-decision-log.md` (D-0026, D-0027), this file. **Not touched, per this session's explicit constraints:** `10`, `11`, `13`, `14`; D-0015(a) (mandate wording/SCA research) and the auth-mechanism decision were both raised, neither decided.
+
+**What turned out to need a ruling mid-session (asked, not silently decided):** (1) whether to build owner/staff/platform-admin controllers by inventing an auth mechanism `05` defers — user chose to build only the slug/token mechanisms and raise the gap; (2) whether to build booking creation with a flagged placeholder `mandate_text` or skip it — user chose to skip it and raise the contract gap. Both are recorded above and in `05`'s Session 9 amendment.
+
+**Remaining open items, split pilot-dependent vs. needs-your-ruling:**
+
+- *Needs a pilot (unchanged from prior sessions):* slot-computation materialization under real traffic; reminder-cadence effectiveness (R-04); the 15-minute hold window's actual correctness (D-0011); `08`'s hosting-provider/region/tier choice and PITR/retention sizing; concrete alerting thresholds.
+- *Needs your ruling — new or newly-confirmed-blocking this session:*
+  - **Auth token mechanics for owner/staff/platform-admin** (session vs. API token, refresh, expiry) — `05`'s Deferred section has named this since Session 2; this session confirms it now blocks real controllers for those actors, not just a documentation gap.
+  - **The `payment_mandates.mandate_text` contract gap** — `05`'s booking-creation request has no field carrying the actual rendered mandate text a customer saw, and D-0010 requires storing it verbatim. This is separate from, and doesn't require resolving, D-0015(a)'s deferred wording/SCA research — a field could exist and carry *placeholder* client-rendered text today; it simply doesn't exist in `05` yet.
+  - **D-0027's Stripe-mid-request transaction boundary** — raised with a proposed shape, not decided; should be resolved by (or before) whoever builds real Stripe-touching booking creation, not left to whichever way that controller happens to get written.
+  - **`booking_events.actor_type` has no `platform_admin` value** — a small, `04`-scoped gap found while reasoning about the (unbuilt) admin-impersonation audit requirement; needs a `04` change whenever that path is actually built.
+- *Still deferred, unchanged:* D-0015(a) (mandate wording/SCA research) — explicitly out of this session's scope to decide, per the session's own constraints.
+
 ## Next recommended session
 
-- Proposed session title: **Session 9 — Real Tenant Resolution and the
-  Booking-Creation Path, or a Real Pilot Discovery.**
+- Proposed session title: **Session 10 — Owner/Staff Auth Mechanics, the
+  Mandate-Text Contract Fix, and Booking Creation — or a Real Pilot
+  Discovery.**
 - As in every prior handoff: a real candidate pilot studio becoming
   available should take priority over further build work — R-01 remains the
-  standing top risk in `10-risk-register.md`, now untouched by eight
-  sessions in a row (two build, six design). Absent that, the natural next
-  build-side session is wiring `App\Http\Middleware\SetTenantContext` into
-  an actual request lifecycle: the slug-based public-booking resolution and
-  the authenticated owner/staff path (D-0009's two named public-path
-  mechanisms, plus D-0021's signed-token class), which unblocks writing the
-  first real controllers/routes and, with them, the first Feature-layer
-  tests `07` describes. `04`'s Availability modeling section ("derived, not
-  materialized") and the booking-creation path (J1–J3) are the concrete
-  first slice once resolution exists — that's also what would finally
-  exercise `07`'s Concurrency and slot integrity section for real.
-- Inputs required: this Project Memory Pack, particularly `05-api-contracts.
-  md` for the endpoint shapes already specified, `09` D-0009/D-0021 for the
-  exact tenant-resolution mechanisms to implement, and `07`'s Concurrency
-  and slot integrity section for the true-multi-connection test pattern
-  once booking creation exists to test.
-- Definition of done: at minimum, the public booking-page slug resolution
-  path wired end-to-end (middleware → real tenant lookup → RLS-protected
-  read), with a Feature test proving it, and this handoff file updated with
-  the new session's amendment.
+  standing top risk in `10-risk-register.md`, now untouched by nine sessions
+  in a row (three build, six design). Absent that, the natural next
+  build-side session has two real prerequisites to rule on before more
+  controllers can be built: (1) how owner/staff/platform-admin actually
+  authenticate (unblocks the authenticated half of D-0009's mechanisms and
+  everything in `05`'s owner/staff/admin endpoint rows), and (2) how
+  `payment_mandates.mandate_text` reaches the server (unblocks booking
+  creation, the exclusion constraint's `23P01 → 409` mapping over a real
+  request, and `07`'s still-uncovered Concurrency and slot integrity
+  section). Either ruling, made first, unlocks real build work; guessing at
+  either inside a build session risks the exact "designed but never
+  executed against a real decision" pattern this pack's own history (D-0012)
+  warns about.
+- Inputs required: this Project Memory Pack, particularly `05`'s Session 9
+  amendment for the precise shape of both gaps, `09` D-0026/D-0027 for the
+  token mechanism and the transaction-boundary proposal already on the
+  table, and `07`'s Concurrency and slot integrity section for the
+  true-multi-connection test pattern once booking creation exists to test
+  against.
+- Definition of done: at minimum, one of the two rulings above made and
+  acted on — either the first authenticated controller wired end-to-end, or
+  booking creation built with a real (not placeholder) path for
+  `mandate_text` — plus this handoff file updated with the new session's
+  amendment.
