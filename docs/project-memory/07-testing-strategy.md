@@ -706,3 +706,42 @@ instance, instead of requiring two separate container bindings — Laravel's
 mid-test container rebind between two requests to the *same* route doesn't
 reach an already-constructed controller. Full reasoning:
 `09-decision-log.md` D-0033.
+
+## Amendment (Session 17 follow-up, 2026-08-26) — a real cross-process re-auth test category, closing a gap D-0043 itself left open
+
+A direct question after D-0043 landed: does anything in this suite now catch
+a *regression* of that bug class? Checked, not assumed — it did not.
+`SequentialRequestTenantContextTest.php` (line 56 above) and every
+login-then-request test in `AuthControllerTest.php`/
+`OwnerAppointmentControllerTest.php`/`StaffAppointmentControllerTest.php`
+all run inside one Pest test method on one shared in-process connection —
+exactly the condition D-0043's own writeup names as what masked it for six
+sessions. Proven empirically, not just argued: with D-0043's fix temporarily
+reverted, `OwnerAppointmentControllerTest.php` stayed **8/8 green**, while
+the new test below correctly failed.
+
+**New category: `tests/Feature/Api/SequentialProcessReauthTest.php`**,
+following `BookingConcurrencyTest.php`'s existing pattern (real, separate OS
+processes — `tests/Support/reauth/`) but for a *sequential* re-auth
+scenario rather than a simultaneous race: process 1 creates and commits a
+tenant/owner; process 2 performs a real login and captures the
+post-`session()->regenerate()` cookies; process 3 is a **brand-new process
+with its own, never-before-touched database connection** presenting only
+those cookies — reproducing the live-`curl` condition that actually found
+D-0043, at the connection-freshness level a shared-connection Pest test
+structurally cannot reach.
+
+**A second gap found building it:** `.env.testing`'s `SESSION_DRIVER=array`
+(deliberate for every other test — see its own comment) doesn't survive a
+process boundary, and forcing `SESSION_DRIVER=file` via a bare `putenv()`
+in the child silently didn't take effect specifically when spawned as
+Pest's own child (Pest's parent process had already populated
+`$_SERVER`/`$_ENV`, which a child inherits and which Dotenv reads ahead of
+`getenv()`). Fixed in `tests/Support/reauth/bootstrap.php` by setting
+`putenv()`/`$_ENV`/`$_SERVER` together. Full account: `09-decision-log.md`
+D-0044.
+
+This is a distinct test *category*, not a one-off: any future auth/tenancy
+decision whose correctness depends on "the first query a connection ever
+runs" (D-0043's exact failure shape) belongs here, in a genuinely separate
+process, not as another sequential Pest assertion.
