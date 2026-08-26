@@ -1,7 +1,30 @@
 # API / Event Contracts
 > Purpose: the interface others depend on.
 > Project: bookslot (PRIVATE track)
-> Last updated: 2026-08-24 (Session 2 — Requirements and Data Model; amended Session 5 — mandate acceptance field added, FR-16 scope resolved; amended Session 6 — reconciled against D-0009/D-0012/D-0014, webhook coverage for the off-session balance charge clarified; amended Session 7 — endpoint 3 redesigned around D-0021's booking-scoped token, closing the tenant-context gap Session 6 raised and didn't fix; amended Session 9 — three endpoints actually implemented for the first time, with two real gaps found and raised rather than invented)
+> Last updated: 2026-08-26 (Session 2 — Requirements and Data Model; amended Session 5 — mandate acceptance field added, FR-16 scope resolved; amended Session 6 — reconciled against D-0009/D-0012/D-0014, webhook coverage for the off-session balance charge clarified; amended Session 7 — endpoint 3 redesigned around D-0021's booking-scoped token, closing the tenant-context gap Session 6 raised and didn't fix; amended Session 9 — three endpoints actually implemented for the first time, with two real gaps found and raised rather than invented; amended Session 10 — both Session 9 gaps closed: auth wired (D-0029), booking creation built for real (D-0030); amended Session 16 — endpoint 1 (availability) built for real (D-0039), first real frontend consumer, a real CSRF-on-public-endpoints finding recorded (D-0041))
+
+## Amendment (Session 16, 2026-08-26) — availability built; the first real frontend consumer; public endpoints found to still require Sanctum's CSRF cookie
+
+**Objective, for context:** this session's actual deliverable was the Nuxt frontend (`frontend/`, see `03-architecture.md`'s own Session 16 amendment for the repo-layout decision) — the first customer-facing surface calling this API. Two real gaps surfaced by building and actually exercising that consumer, both closed this session rather than left as sketches:
+
+- **Endpoint 1, `GET /api/tenants/{slug}/availability`, is now real** — see D-0039 (`09-decision-log.md`) for the full derived-slot algorithm as built (working hours + exceptions + buffered existing-appointment occupancy, timezone-projected per calendar date) and the two new provisional config decisions (`availability_max_lookahead_days` default 60, `availability_slot_increment_minutes` default 15). Response shape is unchanged from this file's original sketch (`{"slots": [{"staff_id","starts_at","ends_at"}]}`); `staff_id` omitted searches every active staff member (this schema still has no staff/service pivot, so every active staff member is treated as offering every service — unchanged from before this session).
+- **A real, previously-unexercised finding: public/unauthenticated endpoints still require Sanctum's CSRF cookie when called from a configured stateful origin.** Found by actually issuing a cross-origin request from the frontend's own origin, not by reading the code — see D-0041 for the full decision (kept CSRF protection as-is; the frontend performs the real `GET /sanctum/csrf-cookie` → `X-XSRF-TOKEN` dance) and the options rejected. This applies to endpoint 2 (`POST .../bookings`) and endpoint 3 (`POST .../confirm-payment`) exactly as much as to the authenticated owner/staff/admin endpoints — not a new requirement, but the first time it was actually proven true for the public ones specifically.
+
+**Verified end to end against the real running API, not just by test suite:** a real HTTP request sequence (services → availability → mandate → booking → confirm-payment), including the real CORS + CSRF cookie dance with `Origin: http://localhost:3000`, produced a real `pending_payment` → `confirmed` appointment, confirmed via a direct database read afterward. See `12-session-handoff.md`'s Session 16 amendment for the full verification account.
+
+**Files touched this session (API-contract-relevant only — see the handoff for the complete list):** `app/Http/Controllers/Api/AvailabilityController.php` (new), `config/booking.php` (two new keys), `routes/api.php`, `tests/Feature/Api/AvailabilityControllerTest.php` (new), `frontend/` (new — the consumer), this file, `09-decision-log.md` (D-0038–D-0041).
+
+## Amendment (Session 10, 2026-08-25) — both Session 9 gaps closed: auth wired, booking creation built
+
+Both gaps Session 9 raised and deliberately did not close are closed this session, by ruling (see `09-decision-log.md` D-0029/D-0030/D-0031 for full reasoning):
+
+- **Endpoint 2, `POST /api/tenants/{slug}/bookings`, is now real**, not just sketched — see its own section below for the shape as actually built, which differs from the original sketch in a few real ways: error responses now also include `404 { "error": "NOT_FOUND" }` (unknown `service_id`/`staff_id`) and `502 { "error": "PAYMENT_PROVIDER_UNAVAILABLE" }` (the Stripe call itself failed — D-0027/D-0030's transaction-boundary cleanup path); `422` responses use the shape `{ "error": "VALIDATION_FAILED", "fields": {...} }` globally now (see below), not per-endpoint. The mandate-contract gap is closed by `mandate_text` being **server-rendered** (`App\Mandates\MandateRenderer`, D-0030) rather than added as a client-facing field — the client-facing contract (`mandate_accepted`/`mandate_template_version`) is unchanged from D-0015(b), exactly as anticipated.
+- **New public endpoint: `GET /api/tenants/{slug}/services/{service}/mandate`** — the pre-submission mandate display Session 9 found missing entirely. Returns `{ "template_version", "text", "balance_amount_disclosed" }`, rendered by the same `MandateRenderer` booking creation's storage path uses. `404 { "error": "NOT_FOUND" }` for an unknown/cross-tenant `service`.
+- **New auth endpoints (D-0029):** `POST /api/tenants/{slug}/login` (owner/staff — runs behind the slug-resolution mechanism, since `users_tenant_email_unique` is per-tenant and the lookup needs to know which tenant first), `POST /api/admin/login` (platform_admin — no tenant resolution needed, since a `platform_admin` row is visible with no context set), `POST /api/logout` (shared by every role). All three: `{"email","password"}` in (login), `401 { "error": "INVALID_CREDENTIALS" }` on failure or a wrong-role credential match at the wrong entry point; success returns `{"user": {"id","role","tenant_id","name","email"}}`. Real Sanctum SPA (stateful/cookie) session auth — a valid CSRF token is required on every state-changing request from a configured frontend origin, verified by execution, not assumed (see D-0029).
+- **A global `{"error": "VALIDATION_FAILED", "fields": {...}}` rendering rule** (`bootstrap/app.php`) now applies to every `api/*` endpoint's `ValidationException`, not per-controller — endpoint 8's `05`-documented shape (already written this way) is now what every endpoint actually returns, including the two above. Likewise a global `{"error": "NOT_FOUND"}` rule for `NotFoundHttpException` (covers both an unmatched route and any `findOrFail()` miss — Laravel's own exception handler unconditionally converts `ModelNotFoundException` into `NotFoundHttpException` before any custom `ModelNotFoundException`-typed renderer would ever run, found by executing this, not by reading the framework's docs).
+- **A representative, real slice of owner/staff/admin endpoints is now built** — not all of `05`'s rows, by design (see D-0029): `POST /api/owner/services` (endpoint 8 below, unchanged shape, now with a real controller behind real auth), `GET /api/staff/appointments` (FR-16/D-0013 own-bookings-only, proven by test), `GET /api/admin/tenants/{tenant}/appointments` (D-0009's impersonation path, proven cross-tenant-safe by test). Every other owner/staff/admin row in the tables below is still just a contract, no controller — unblocked by D-0029, not yet built.
+
+**Not resolved this session, carried forward:** real Stripe test-mode credentials were not available (see `12-session-handoff.md`) — `StripePaymentIntentGateway` is built and wired as the real default, but only exercised via a fake in this session's tests; the hold-window expiry scheduled job (D-0011's mechanism was already decided, no job enforces it yet); backfilling `payment_mandates.stripe_payment_method_id` once a payment method is actually known (D-0031); rate limiting on public endpoints (already named in Deferred below).
 
 ## Amendment (Session 9, 2026-08-24) — three endpoints implemented; an auth-mechanism gap and a mandate-contract gap raised, not closed
 
@@ -100,9 +123,13 @@ and rate-limit numbers are still future-session work (see Deferred below).
 
 | Method & path | Purpose | MVP journey |
 |---|---|---|
-| `GET /api/tenants/{slug}/services` | List active services for a studio | J1 |
-| `GET /api/tenants/{slug}/availability?service_id=&staff_id=&from=&to=` | Computed bookable slots (derived, per `04`) | J1, FR-02 |
-| `POST /api/tenants/{slug}/bookings` | Create a `pending_payment` appointment (claims the slot) | J1, J3 |
+| `GET /api/tenants/{slug}/services` | List active services for a studio — **built** | J1 |
+| `GET /api/tenants/{slug}/services/{service}/mandate` | Pre-submission mandate text display, server-rendered — **built Session 10, D-0030** | J1 |
+| `GET /api/tenants/{slug}/availability?service_id=&staff_id=&from=&to=` | Computed bookable slots (derived, per `04`) — **built Session 16, D-0039** | J1, FR-02 |
+| `POST /api/tenants/{slug}/bookings` | Create a `pending_payment` appointment (claims the slot) — **built Session 10, D-0030** | J1, J3 |
+| `POST /api/tenants/{slug}/login` | Owner/staff login (Sanctum SPA session) — **built Session 10, D-0029** | — |
+| `POST /api/admin/login` | Platform-admin login, no tenant resolution needed — **built Session 10, D-0029** | — |
+| `POST /api/logout` | Shared by every role — **built Session 10, D-0029** | — |
 | `POST /api/bookings/{token}/confirm-payment` | Confirm/retry the deposit PaymentIntent for an existing `pending_payment` booking, keyed by the booking-scoped `payment_confirmation_token` (D-0021) — **not** a raw `appointment_id`, see endpoint 3 below | J1, J2 |
 | `GET /api/bookings/manage/{token}` | Look up a booking via the signed manage-booking link (no login) | J1, J7 |
 | `POST /api/bookings/manage/{token}/cancel` | Customer-initiated cancellation | J7 |
@@ -116,7 +143,7 @@ and rate-limit numbers are still future-session work (see Deferred below).
 | `POST /api/owner/appointments/{id}/refund` | Issue a full/partial refund on the deposit |
 | `POST /api/owner/appointments/{id}/balance/charge` | Trigger the off-session balance charge |
 | `POST /api/owner/appointments/{id}/balance/mark-paid` | Record a manual (in-person) balance payment |
-| `GET/POST/PATCH /api/owner/services` | Manage services + deposit config |
+| `GET/POST/PATCH /api/owner/services` | Manage services + deposit config — **`POST` built Session 10 (D-0029), real auth-gated; `GET`/`PATCH` still unbuilt** |
 | `GET/POST/PATCH /api/owner/staff` | Manage staff/resources |
 | `GET/POST/PATCH /api/owner/staff/{id}/working-hours` | Recurring availability |
 | `POST /api/owner/staff/{id}/availability-exceptions` | One-off blocks/holidays |
@@ -129,22 +156,27 @@ and rate-limit numbers are still future-session work (see Deferred below).
 
 | Method & path | Purpose |
 |---|---|
-| `GET /api/staff/appointments?from=&to=` | Own upcoming bookings only, at MVP — resolved, not open (FR-16, D-0013). A studio-level toggle to widen this to all-staff-visible is a named Paid-tier feature, not built here |
+| `GET /api/staff/appointments?from=&to=` | Own upcoming bookings only, at MVP — resolved, not open (FR-16, D-0013). A studio-level toggle to widen this to all-staff-visible is a named Paid-tier feature, not built here. **Built Session 10 (D-0029)**, real auth-gated, proven by test that a second staff member's appointments never appear |
 
 ### Platform admin (authenticated, cross-tenant, separate role per D-0005)
 
 | Method & path | Purpose |
 |---|---|
-| `GET /api/admin/tenants/{id}/appointments` | Support/ops lookup. **Corrected, Session 6** — authenticates as the ordinary `bookslot_app` role and impersonates tenant `{id}` by setting `app.current_tenant_id` to it, gated by an app-layer check that the caller is `role = 'platform_admin'` (D-0009); never a `BYPASSRLS` role (that's reserved exclusively for `bookslot_migrator`'s offline use), and never the owner-facing query path |
+| `GET /api/admin/tenants/{id}/appointments` | Support/ops lookup. **Corrected, Session 6** — authenticates as the ordinary `bookslot_app` role and impersonates tenant `{id}` by setting `app.current_tenant_id` to it, gated by an app-layer check that the caller is `role = 'platform_admin'` (D-0009); never a `BYPASSRLS` role (that's reserved exclusively for `bookslot_migrator`'s offline use), and never the owner-facing query path. **Built Session 10 (D-0029)**, proven cross-tenant-safe by test |
 
 ## Core endpoints, detailed
 
-### 1. `GET /api/tenants/{slug}/availability`
+### 1. `GET /api/tenants/{slug}/availability` — built Session 16, D-0039
 
 **Request (query params):** `service_id` (uuid, required), `staff_id` (uuid,
-optional — omit to search across all staff who offer the service),
-`from`/`to` (date, required, bounded to a sane lookahead window — exact
-number of weeks is a product decision, not fixed here).
+optional — omit to search across all staff who offer the service — this
+schema has no staff/service pivot yet, so every active staff member is
+treated as offering every service), `from`/`to` (date, `Y-m-d`, required).
+The lookahead window is bounded by `config('booking.
+availability_max_lookahead_days')` (default 60 — a real, provisional
+product decision now, D-0039, not left open) — a wider range returns `422
+VALIDATION_FAILED`. Candidate slots are generated at `config('booking.
+availability_slot_increment_minutes')` (default 15).
 
 **Response `200`:**
 ```json
@@ -160,7 +192,7 @@ tenant's IANA zone for this purpose).
 
 **Errors:** `404` unknown `slug`/`service_id`; `422` invalid date range.
 
-### 2. `POST /api/tenants/{slug}/bookings`
+### 2. `POST /api/tenants/{slug}/bookings` — built Session 10, D-0030
 
 **Request:**
 ```json
@@ -176,9 +208,14 @@ tenant's IANA zone for this purpose).
 `mandate_accepted` must be `true` (a `422 VALIDATION_FAILED` otherwise);
 `mandate_template_version` echoes back which version of the mandate text the
 customer was shown, and is stored verbatim into
-`payment_mandates.mandate_template_version`. How the client obtains the
-mandate text/version to display before submitting — and the text's actual
-wording — is not decided here; that's the still-deferred half of D-0015(a).
+`payment_mandates.mandate_template_version`. The client obtains the mandate
+text/version to display before submitting from **`GET /api/tenants/{slug}/
+services/{service}/mandate`** (built Session 10, D-0030) — `mandate_text`
+itself is never sent by the client on this endpoint; it's rendered
+server-side by the same `App\Mandates\MandateRenderer` both endpoints share.
+The text's actual final wording stays deferred (D-0015(a)) — this session's
+renderer produces real, live text (not a placeholder), just not
+legally-reviewed copy.
 
 **Response `201`** (slot claimed, deposit PaymentIntent created):
 ```json
@@ -200,10 +237,23 @@ ability to drive payment confirmation/retry).
 
 **Errors:**
 - `409 { "error": "SLOT_ALREADY_BOOKED" }` — the exclusion constraint
-  rejected the insert (J3, D-0007). The frontend's defined response is to
-  re-fetch availability, not to retry the same request.
-- `422 { "error": "VALIDATION_FAILED", "fields": {...} }` — bad input.
-- `404` unknown `slug`/`service_id`/`staff_id`.
+  rejected the insert (`23P01`, J3/D-0007), **or** Postgres's own
+  exclusion-constraint check deadlocked against a genuinely concurrent
+  conflicting insert (`40P01` — a real finding from Session 10's
+  true-concurrency test, not a hypothetical; both SQLSTATEs map here). The
+  frontend's defined response is to re-fetch availability, not to retry the
+  same request. **Concurrency-proven, Session 10:** two simultaneous
+  requests for the exact same slot — one `201`, one exactly this `409`,
+  never a `500` — see `07-testing-strategy.md`.
+- `422 { "error": "VALIDATION_FAILED", "fields": {...} }` — bad input,
+  including `mandate_accepted` not being `true`.
+- `404 { "error": "NOT_FOUND" }` unknown `slug`/`service_id`/`staff_id`.
+- `502 { "error": "PAYMENT_PROVIDER_UNAVAILABLE" }` — **added Session 10,
+  D-0030.** The appointment row was created and committed (D-0027's
+  transaction boundary), then the Stripe PaymentIntent call itself failed;
+  the hold is released immediately (appointment moved to `cancelled`,
+  `cancelled_reason: "payment_provider_error"`) rather than left to expire
+  naturally, so the customer can retry a fresh booking right away.
 
 ### 3. `POST /api/bookings/{token}/confirm-payment` — redesigned Session 7, D-0021
 
@@ -402,7 +452,23 @@ that already succeeded.
   above will need one before it's real).
 - Rate limiting, especially on the public booking endpoints (unauthenticated
   by nature — abuse/spam-booking protection is a real concern FR-03's
-  hold-window design doesn't fully address on its own).
-- Auth token mechanics (session vs. API token, refresh, expiry) for owner/
-  staff/admin — `02-requirements.md` establishes *who* authenticates, not
-  *how* yet.
+  hold-window design doesn't fully address on its own; still true after
+  Session 10 — no rate limiting was added to the new login endpoints or
+  booking creation either).
+- **Resolved, Session 10 (D-0029):** auth token mechanics for owner/staff/
+  admin — Sanctum SPA (stateful/cookie) mode, one shared `web` guard,
+  role-based authorization at the app layer. Session/refresh/expiry follow
+  Laravel's own default session lifetime (`config/session.php`,
+  `SESSION_LIFETIME`) — no bespoke expiry policy was decided or needed
+  beyond that default.
+- Password-reset and account-provisioning flows for owner/staff/admin — not
+  named by D-0029's ruling, not built; how a studio's first owner account
+  actually gets created is still unspecified.
+- The hold-window expiry scheduled job (D-0011's mechanism/value were
+  already decided; the job enforcing it doesn't exist — a `pending_payment`
+  appointment that's never confirmed and never hits a Stripe failure has
+  nothing that cancels it yet).
+- Backfilling `payment_mandates.stripe_payment_method_id` once a payment
+  method is actually attached (D-0031) — the real webhook handler or a real
+  (non-stubbed) confirm-payment implementation would do this; neither
+  exists yet.

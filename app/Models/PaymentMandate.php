@@ -24,7 +24,7 @@ use Illuminate\Support\Carbon;
  * @property string $accepted_ip
  * @property string|null $accepted_user_agent
  * @property string $stripe_payment_intent_id
- * @property string $stripe_payment_method_id
+ * @property string|null $stripe_payment_method_id
  * @property Carbon $created_at
  * @property-read Tenant $tenant
  * @property-read Appointment|null $appointment

@@ -4,6 +4,8 @@ namespace Tests\Support;
 
 use App\Models\Appointment;
 use App\Models\Customer;
+use App\Models\Payment;
+use App\Models\PaymentMandate;
 use App\Models\Service;
 use App\Models\Staff;
 use App\Models\Tenant;
@@ -48,6 +50,41 @@ final class BookingFixture
     {
         TenantContext::run($tenant->id, function () use ($appointmentId, $expected) {
             expect(Appointment::find($appointmentId)->status)->toBe($expected);
+        });
+    }
+
+    /**
+     * The `payments`/`payment_mandates` rows BookingController's TX2
+     * (D-0030) always creates together for a real `pending_payment`
+     * appointment — needed by PaymentConfirmationControllerTest (D-0033),
+     * which now re-checks the deposit PaymentIntent against
+     * PaymentIntentGateway::retrieve() rather than assuming success.
+     *
+     * @param  array<string, mixed>  $paymentAttributes
+     * @param  array<string, mixed>  $mandateAttributes
+     */
+    public static function depositPaymentFor(
+        Tenant $tenant,
+        Appointment $appointment,
+        array $paymentAttributes = [],
+        array $mandateAttributes = [],
+    ): Payment {
+        return TenantContext::run($tenant->id, function () use ($tenant, $appointment, $paymentAttributes, $mandateAttributes) {
+            $payment = Payment::factory()->create(array_merge([
+                'tenant_id' => $tenant->id,
+                'appointment_id' => $appointment->id,
+                'type' => 'deposit',
+                'status' => 'requires_action',
+            ], $paymentAttributes));
+
+            PaymentMandate::factory()->create(array_merge([
+                'tenant_id' => $tenant->id,
+                'appointment_id' => $appointment->id,
+                'stripe_payment_intent_id' => $payment->stripe_payment_intent_id,
+                'stripe_payment_method_id' => null,
+            ], $mandateAttributes));
+
+            return $payment;
         });
     }
 }

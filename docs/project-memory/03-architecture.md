@@ -199,3 +199,30 @@ file's architectural picture stays current:
   backoff design) — `08-deployment-and-operations.md`.
 - Testing strategy, including how the tenant-isolation test suite is
   structured — `07-testing-strategy.md`.
+
+## Amendment (Session 16, 2026-08-26) — repo layout decided: monorepo, `frontend/` in this same repository (D-0038)
+
+D-0002 (this file's original recommendation, above) committed to a
+decoupled Laravel API + Nuxt frontend but never settled *where the Nuxt
+code lives* — a monorepo/separate-repo decision this file's original text
+didn't address at all. This session, the first to write any Nuxt code,
+needed an answer before scaffolding anything, and none was on record.
+
+**Decided: monorepo — the Nuxt app lives at `frontend/` in this same
+repository**, not a second `bookslot-frontend` repository. Recorded in full
+as **D-0038** (`09-decision-log.md`). Short version: this is a solo-track
+private repository (this file's own header), the two halves change
+together constantly at this project's current stage (every session so far
+that touched the API contract also had to touch whatever consumed it), and
+a second repository would mean a second `git clone`, a second CI setup,
+and cross-repo PR coordination for zero benefit this project's current
+scale actually needs. `frontend/` is a fully independent Nuxt project
+(its own `package.json`, `node_modules`, `.nuxt`/`.output` build
+artifacts, all gitignored within `frontend/.gitignore`) — "monorepo" here
+means "one `git` repository," not a shared build/dependency graph between
+PHP and Node. The decoupled-API contract itself (D-0002) is unchanged by
+this — `frontend/` still only ever talks to the Laravel API over real
+HTTP, the same as a separate-repo frontend would, so this decision is
+reversible later (splitting `frontend/` out via `git subtree`/`git
+filter-repo` if the project ever grows a second team or a second
+consumer of the API) without any API-shape rework.

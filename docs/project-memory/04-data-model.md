@@ -441,7 +441,7 @@ re-verified against whatever the buffer bounds happen to be at that time.
 | accepted_ip | inet | no | | |
 | accepted_user_agent | text | yes | null | |
 | stripe_payment_intent_id | text | no | | The deposit PaymentIntent this mandate covers |
-| stripe_payment_method_id | text | no | | The saved payment method the later off-session balance charge (J5) will target |
+| stripe_payment_method_id | text | **yes** | null | The saved payment method the later off-session balance charge (J5) will target. **Nullable per D-0031 (Session 10)** — see the amendment below; not known at mandate-insert time, backfilled once a payment method is actually attached |
 | created_at | timestamptz | no | `now()` | |
 
 - Unique: `appointment_id`.
@@ -482,6 +482,27 @@ re-verified against whatever the buffer bounds happen to be at that time.
   (an explicit acceptance flag) has been made — `05-api-contracts.md` now
   carries `mandate_accepted` and `mandate_template_version` on that request.
   The wording/SCA-flow research above is a separate, still-open item.
+- **Amendment (Session 10, 2026-08-25) — D-0031: `stripe_payment_method_id`
+  made nullable.** Building booking creation for real surfaced a genuine
+  sequencing conflict D-0010's original DDL didn't anticipate: a deposit
+  PaymentIntent created with `setup_future_usage: off_session` has **no**
+  attached payment method until the customer actually enters card details
+  client-side (Stripe's Payment Element) and the PaymentIntent is
+  confirmed — which happens strictly *after* booking creation's synchronous
+  response already returned. `stripe_payment_method_id` therefore cannot be
+  populated at mandate-insert time under any transaction shape, not just
+  the specific one D-0027 proposes — the value genuinely doesn't exist yet.
+  Resolved by dropping its `NOT NULL` constraint
+  (`2026_08_25_000020_make_payment_mandates_payment_method_id_nullable.php`);
+  it is backfilled once a payment method is actually known (a webhook
+  handler or the confirm-payment path — neither builds that backfill this
+  session; see `12-session-handoff.md`). `mandate_text`,
+  `balance_amount_disclosed`, `accepted_at`, `accepted_ip`,
+  `accepted_user_agent` are unaffected — captured at booking-submission
+  time exactly as D-0010 intended, since none of those depend on Stripe's
+  own confirmation timing. `stripe_payment_intent_id` stays `NOT NULL` — it
+  *is* known by the time the mandate row is written (D-0030's TX2, after
+  the Stripe call), unlike the payment method.
 
 ### `stripe_webhook_events` (idempotency/dedupe — not tenant-scoped; a webhook may arrive before we know which tenant it maps to)
 
@@ -509,7 +530,7 @@ re-verified against whatever the buffer bounds happen to be at that time.
 | id | uuid | no | `gen_random_uuid()` | |
 | tenant_id | uuid | no | | |
 | appointment_id | uuid | yes | `REFERENCES appointments(id) ON DELETE RESTRICT` | Null for a payment-only event not tied to one appointment lifecycle transition |
-| actor_type | text | no | | `owner, staff, customer, system, webhook` |
+| actor_type | text | no | | `owner, staff, customer, system, webhook, platform_admin` — see D-0028 |
 | actor_id | uuid | yes | null | `users.id` or `customers.id` depending on `actor_type`; no FK (polymorphic) |
 | event_type | text | no | | e.g. `status_changed, refund_issued, no_show_marked` |
 | from_status | text | yes | null | |
@@ -520,6 +541,30 @@ re-verified against whatever the buffer bounds happen to be at that time.
 - Index: `(tenant_id, appointment_id, created_at)`.
 - Never deleted — this table plus `stripe_webhook_events.payload` together
   are the dispute-evidence trail 06 calls for.
+- **`actor_type` semantics, per D-0028 (Session 10):** `owner`/`staff` — an
+  authenticated studio user acting through the owner/staff dashboard;
+  `customer` — the unauthenticated customer acting through a public
+  booking/manage-booking/confirm-payment surface; `platform_admin` — a
+  platform_admin user acting through the admin-impersonation path (D-0009),
+  distinct from `owner`/`staff` specifically so a cross-tenant support
+  action is never conflated with the studio's own actors in the audit
+  trail; `system` — an internal automated actor with no external trigger
+  (a scheduled job, e.g. the hold-window expiry sweep from D-0011); `webhook`
+  — an external event source driving the mutation (a Stripe webhook
+  delivery). `system` and `webhook` were both already in the original
+  CHECK list but never had their distinction written down; this note
+  closes that gap without changing either value.
+
+### Amendment (Session 10, 2026-08-25) — D-0028: `platform_admin` added to `booking_events.actor_type`
+
+`actor_type`'s CHECK list gains `platform_admin`, closing the gap Session 9
+flagged (`12-session-handoff.md`) while reasoning about the still-unbuilt
+admin-impersonation audit requirement: the list had no value for a
+platform_admin actor distinct from `owner`/`staff`. See D-0028
+(`09-decision-log.md`) for the ruling and the `system`/`webhook` semantics
+note above, added at the same time since both were about clarifying this
+same column. Migration:
+`database/migrations/2026_08_25_000019_add_platform_admin_to_booking_events_actor_type.php`.
 
 ### `notification_deliveries` (reminders + rebooking prompts, per FR-06/FR-14)
 

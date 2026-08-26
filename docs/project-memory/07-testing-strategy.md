@@ -1,7 +1,25 @@
 # Testing Strategy
 > Purpose: what we test, at which level, and why that is sufficient.
 > Project: bookslot (PRIVATE track)
-> Last updated: 2026-08-24 (Session 4 — concurrency/slot-integrity cases added after D-0008's DDL correction; amended Session 5 — framework decided, CI gate and E2E scope settled; amended Session 6 — the missing D-0008 invariant test added, plus one D-0006 gap; amended Session 7 — D-0021 confirm-payment token tests, the D-0010 erasure test D-0022 made writable, and `rebooking_invite` coverage; amended Session 9 — the two verification gaps Session 8's handoff left open (malformed/non-existent GUC values; an application-layer scope guard) closed by execution, and real HTTP-level tenant resolution wired for the first time)
+> Last updated: 2026-08-26 (Session 4 — concurrency/slot-integrity cases added after D-0008's DDL correction; amended Session 5 — framework decided, CI gate and E2E scope settled; amended Session 6 — the missing D-0008 invariant test added, plus one D-0006 gap; amended Session 7 — D-0021 confirm-payment token tests, the D-0010 erasure test D-0022 made writable, and `rebooking_invite` coverage; amended Session 9 — the two verification gaps Session 8's handoff left open (malformed/non-existent GUC values; an application-layer scope guard) closed by execution, and real HTTP-level tenant resolution wired for the first time; amended Session 10 — Sanctum SPA auth tested with a real CSRF-rejection case, booking creation built and tested end to end including the true multi-process concurrency case this section had flagged as missing since Session 8, and D-0027's transaction boundary proven against a real Stripe-touching controller; amended Session 16 — availability's derived-slot algorithm covered, plus this project's first real cross-origin/CSRF proof against a live server, outside the Pest suite entirely)
+
+## Amendment (Session 16, 2026-08-26) — availability coverage, and this project's first real live-server proof
+
+**Availability (D-0039).** `tests/Feature/Api/AvailabilityControllerTest.php` covers `GET /api/tenants/{slug}/availability`'s derived-slot algorithm: working-hours-bounded slot generation at the configured increment; an existing appointment's *buffered* occupancy excluding every overlapping candidate, not just its literal window (the case worth calling out — it proves the buffer math, not just the working-hours math); a full-day `availability_exceptions` block removing exactly that date; unknown `service_id`/`staff_id` → `404`; an omitted `staff_id` searching every active staff member; a lookahead past the configured max → `422`. All against real Postgres, real `staff_working_hours`/`availability_exceptions`/`appointments` rows — no SQLite, per this section's own standing rule.
+
+**A real live-server proof, not just Pest — this project's first.** This session's actual deliverable (the Nuxt frontend, `frontend/`) needed proof against the real running application, not the test suite's in-process request simulation: `php artisan serve` + the real Postgres/Redis containers + a real `db:seed`-created tenant, driven by real `curl` requests replicating exactly what the frontend's own `apiFetch()` composable sends (same headers, same CSRF cookie dance, same request bodies) — services → availability → mandate → booking → confirm-payment, ending in a real `confirmed` appointment verified by a direct `TenantContext::run()` database read afterward, not just the HTTP response. This surfaced two real gaps no Pest run had ever hit (`.env` missing `APP_KEY`; the local PHP CLI's missing `phpredis` extension breaking Sanctum's stateful session) and one real application-behavior finding (D-0041: public endpoints still require the Sanctum CSRF cookie) — all fixed or documented this session, none silently worked around. See `12-session-handoff.md`'s Session 16 amendment for the full step-by-step account.
+
+**`composer ci:check` after this session: 68/68 Pest tests, 377 assertions, Pint/PHPStan clean.**
+
+## Amendment (Session 10, 2026-08-25) — auth, booking creation, and D-0027 all proven by execution
+
+**Auth (D-0029).** `tests/Feature/Api/AuthControllerTest.php` proves login/logout, role-gating (401 unauthenticated, 403 wrong role), and — the one worth calling out specifically — a **real** CSRF-rejection test. Laravel's own CSRF middleware (`PreventRequestForgery::runningUnitTests()`) unconditionally skips verification whenever `app()->runningInConsole() && app()->runningUnitTests()` — both true for every ordinary Pest run, meaning a naive test asserting "a request without a CSRF token is rejected" would pass trivially without the check ever running. `tests/Support/AuthTestHelpers.php`'s `disableConsoleCsrfBypass()` forces `runningInConsole()` to `false` via reflection (no public API exists for this) for the specific tests that need the real path. **Verified the workaround itself matters**, not just documented it: removed it, watched the "rejected" test's assertion flip from `419` to `200` (proving CSRF was silently not being checked), then restored it. `StaffAppointmentControllerTest.php`/`AdminAppointmentControllerTest.php` prove the two new tenant-resolution mechanisms (`resolve.tenant.from-user`, `resolve.tenant.impersonate`) scope correctly — a second staff member's appointments never appear; impersonating tenant A never leaks tenant B's rows.
+
+**Booking creation (D-0030).** `tests/Feature/Api/BookingControllerTest.php` (happy path incl. token verification and mandate-text equality with the pre-submission endpoint; unknown-service 404; mandate-not-accepted 422) and `MandateControllerTest.php` (the pre-submission endpoint renders identically to what booking creation stores — the one-shared-renderer requirement, proven, not asserted). `BookingConcurrencyTest.php` closes the "Concurrency and slot integrity" section's headline case, open since Session 8 — see that section below for the mechanism (real, separate OS processes; a single PHP test process can't produce genuinely separate database connections on its own).
+
+**D-0027's transaction boundary, proven against a real Stripe-touching controller for the first time.** `BookingControllerTest.php`'s two D-0027 cases bind `tests/Support/FakePaymentIntentGateway.php` (this project's instance of the already-documented "faked Stripe client by default" tier below) over the `PaymentIntentGateway` interface in the container: one makes the fake throw and asserts the appointment TX1 already committed is still present in the database (now `cancelled` by `BookingController`'s own deliberate cleanup, never silently rolled back or missing) with no `payments`/`payment_mandates` row (TX2 never ran); the other makes the fake sleep a full second and asserts the request still completes successfully. `09-decision-log.md` D-0027 is amended from *raised, not decided* to **accepted** on the strength of this.
+
+**Real Stripe test-mode credentials were not available this session** (see `12-session-handoff.md`) — the real `StripePaymentIntentGateway` (stripe-php SDK) is built and wired as the default binding, but this session's suite only exercises it via the fake. Running booking creation against a real Stripe test-mode Connect account is a named, real open item, not claimed as covered.
 
 ## Amendment (Session 9, 2026-08-24) — GUC edge cases executed, an app-layer scope guard added
 
@@ -261,7 +279,29 @@ also why these cases sit in a distinct slower tier (see CI integration).
   overlapping `appointment_range`s for the same `tenant_id`/`staff_id`;
   assert exactly one commits and the other raises `23P01`, and — one layer
   up, at the feature layer — that the API translates the losing request into
-  `409 SLOT_ALREADY_BOOKED`, never a `500` (J3/D-0007).
+  `409 SLOT_ALREADY_BOOKED`, never a `500` (J3/D-0007). **Built and passing,
+  Session 10 (D-0030)** — `tests/Feature/Api/BookingConcurrencyTest.php`.
+  A single PHP test process can't produce two genuinely separate database
+  connections racing each other (`RefreshDatabase`'s own transaction is
+  invisible to a second connection regardless of how it's driven), so this
+  goes one level further than "two connections": it spawns two real,
+  separate OS processes (`tests/Support/concurrency/probe.php`), each
+  bootstrapping its own Laravel application and connection, each
+  dispatching one real HTTP-level request through the actual
+  router/middleware/`BookingController` stack, synchronized to a shared
+  target microtime. Proves the API-layer translation (one `201`, one clean
+  `409`) directly, not just the underlying constraint — verified stable
+  across repeated runs, not a one-off pass. Fixture data is created and
+  committed by a third standalone process (`setup.php`) for the same
+  connection-visibility reason. **A genuine finding from running it, not
+  anticipated in advance:** under a sufficiently tight race, Postgres's own
+  exclusion-constraint check can make the two concurrent inserts
+  **deadlock** against each other (`40P01`) rather than one cleanly
+  blocking and then failing with `23P01` — `BookingController`'s catch
+  only handled `23P01` at first; this real two-process test caught the gap
+  within a handful of runs (a mocked or single-connection test never
+  would have). Both SQLSTATEs now map to the same `409 SLOT_ALREADY_BOOKED`
+  — see `09-decision-log.md` D-0030.
 - **`'[)'` boundary case:** a booking ending exactly at 3:00pm and another
   starting exactly at 3:00pm for the same staff, zero buffer — both must
   succeed (half-open bounds means they don't overlap).
@@ -410,7 +450,13 @@ assumes real Postgres, full stop.
   or test-mode Stripe account needed. Covers: request/response shape
   handling, error-code branching (`card_declined`,
   `authentication_required`), idempotency-key usage, and the app's own state
-  transitions (`payments`/`appointments` status changes).
+  transitions (`payments`/`appointments` status changes). **First concrete
+  instance, Session 10 (D-0030):** `App\Payments\PaymentIntentGateway`
+  (interface) / `tests/Support/FakePaymentIntentGateway.php` (the fake,
+  configurable to succeed, delay, or throw) / `StripePaymentIntentGateway`
+  (the real stripe-php implementation, wired as the default binding but not
+  yet exercised against real Stripe — see this file's Session 10 amendment
+  above).
 - **A narrower, slower Stripe-test-mode subtier (nightly/pre-deploy, not
   every commit):** real API calls against a real Stripe *test-mode* Connect
   account, using Stripe's documented test card numbers for specific decline
@@ -626,3 +672,29 @@ whatever the overall number says:
 - Tenant-isolation suite blocking the fast gate, with a stated runtime
   budget — D-0017.
 - Test framework: Pest — D-0016.
+
+## Amendment (Session 12, 2026-08-26) — confirm-payment's real coverage, still fake-tier only
+
+`PaymentConfirmationControllerTest.php` gained real coverage for what D-0033
+built (previously untestable, since the Session-9 stub had no Stripe-facing
+behavior to test): a successful confirmation backfilling
+`payment_mandates.stripe_payment_method_id` from the gateway's `retrieve()`
+response; a synchronous decline reporting `last_payment_error` honestly
+while leaving the appointment `pending_payment` and moving `payments.status`
+to `failed`; and a J2 retry where the same PaymentIntent's status changes
+between two calls. All of it runs against `FakePaymentIntentGateway`
+(this section's own "faked Stripe client by default" tier) — **the
+real-test-mode subtier this section has named since Session 3 still has no
+tests in it**, for confirm-payment or for booking-creation. See
+`09-decision-log.md` D-0034 for why (real credentials still not available)
+and this file's own "payment-flow testing" section above for what that
+subtier was always meant to cover once they are.
+
+One test-infrastructure detail worth carrying forward for whoever writes the
+real-test-mode subtier: `FakePaymentIntentGateway::$retrieveStatus` now
+accepts an ordered list of statuses, consumed one per call on a single fake
+instance, instead of requiring two separate container bindings — Laravel's
+`Route` object caches a resolved controller for the route's lifetime, so a
+mid-test container rebind between two requests to the *same* route doesn't
+reach an already-constructed controller. Full reasoning:
+`09-decision-log.md` D-0033.

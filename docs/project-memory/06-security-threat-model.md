@@ -1,7 +1,27 @@
 # Security and Threat Model
 > Purpose: what can go wrong, and what stops it.
 > Project: bookslot (PRIVATE track)
-> Last updated: 2026-08-23 (Session 0/1 — design-level only, no code exists yet; amended Session 5 — migrator-credential placement; amended Session 7 — confirm-payment tenant-context fix and an erasure/dispute-evidence carve-out)
+> Last updated: 2026-08-26 (Session 0/1 — design-level only, no code exists yet; amended Session 5 — migrator-credential placement; amended Session 7 — confirm-payment tenant-context fix and an erasure/dispute-evidence carve-out; amended Session 16 — confirmed by execution that CSRF protection covers the public booking endpoints too, not just authenticated ones)
+
+## Amendment (Session 16, 2026-08-26) — CSRF confirmed to cover public endpoints, not just authenticated ones (D-0041)
+
+Found while building this project's first real frontend consumer, by
+actually issuing a cross-origin request rather than reading the middleware
+config: D-0029's Sanctum SPA CSRF protection is **origin-based, not
+route-based** — it applies to every `/api/*` request from a configured
+stateful origin, including the public, unauthenticated booking-creation
+and confirm-payment endpoints. This is a real defense, not a redundant
+one: without it, a malicious third-party page could silently submit a
+forged booking (or a forged payment confirmation) using a real customer's
+browser session/cookies for this origin, without that customer's
+knowledge — CSRF risk that has nothing to do with whether the *endpoint*
+requires a login. D-0041 (`09-decision-log.md`) considered and rejected
+exempting the public routes from CSRF for frontend convenience; the
+frontend instead performs Sanctum's own documented cookie dance
+(`GET /sanctum/csrf-cookie` → `X-XSRF-TOKEN`). No new attack surface was
+found — this amendment records that an existing protection was verified
+to actually cover a surface this file had not previously called out by
+name.
 
 ## Amendment (Session 7, 2026-08-24) — a real gap closed, and a deliberate carve-out reconciled
 

@@ -1,8 +1,15 @@
 <?php
 
+use App\Http\Controllers\Api\Admin\AppointmentController as AdminAppointmentController;
+use App\Http\Controllers\Api\AuthController;
+use App\Http\Controllers\Api\AvailabilityController;
+use App\Http\Controllers\Api\BookingController;
 use App\Http\Controllers\Api\ManageBookingController;
+use App\Http\Controllers\Api\MandateController;
+use App\Http\Controllers\Api\Owner\ServiceController as OwnerServiceController;
 use App\Http\Controllers\Api\PaymentConfirmationController;
 use App\Http\Controllers\Api\ServiceController;
+use App\Http\Controllers\Api\Staff\AppointmentController as StaffAppointmentController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -10,15 +17,12 @@ use Illuminate\Support\Facades\Route;
 | API Routes
 |--------------------------------------------------------------------------
 |
-| First real routes/controllers in this repository — every prior session
-| built no routes at all (docs/project-memory/12-session-handoff.md).
-| Covers the two D-0009 tenant-resolution mechanisms this session's scope
-| supports without inventing an undecided auth mechanism: slug-based, and
-| the signed-token capability class (generalized by D-0021). Authenticated
-| owner/staff routes and the platform-admin impersonation path are
-| deliberately absent — 05-api-contracts.md's auth token mechanics for
-| those actors are still an open item, not decided here (see this
-| session's report/handoff for the raised gap).
+| Public routes cover D-0009's two original tenant-resolution mechanisms:
+| slug-based, and the signed-token capability class (generalized by
+| D-0021). Authenticated owner/staff/platform-admin routes (D-0029, this
+| session) add the other two: resolve.tenant.from-user and
+| resolve.tenant.impersonate. See bootstrap/app.php's middleware-alias
+| comment for the full ordering rationale per route type.
 |
 */
 
@@ -26,10 +30,50 @@ Route::prefix('tenants/{slug}')
     ->middleware(['resolve.tenant.slug', 'tenant.context'])
     ->group(function () {
         Route::get('services', [ServiceController::class, 'index']);
+        Route::get('services/{service}/mandate', [MandateController::class, 'show']);
+        Route::get('availability', [AvailabilityController::class, 'index']);
+        Route::post('login', [AuthController::class, 'login']);
     });
+
+// D-0027/D-0030: deliberately NOT under the group above — `tenant.context`
+// wraps the entire request in one transaction, which is exactly what this
+// route must not do (it calls Stripe mid-request). `resolve.tenant.slug`
+// alone puts tenant_id onto the request; BookingController opens its own
+// short, explicit TenantContext::run() calls around the Stripe call.
+Route::middleware(['resolve.tenant.slug'])
+    ->post('tenants/{slug}/bookings', [BookingController::class, 'store']);
 
 Route::middleware(['resolve.tenant.token:manage_booking', 'tenant.context'])
     ->get('bookings/manage/{token}', [ManageBookingController::class, 'show']);
 
-Route::middleware(['resolve.tenant.token:confirm_payment', 'tenant.context'])
+// D-0033 (amends D-0027/D-0030's principle to a second Stripe-touching
+// route): deliberately NOT under `tenant.context` — this controller now
+// re-checks the PaymentIntent against Stripe mid-request, and must not hold
+// a database transaction open across that external call any more than
+// booking-creation may. `resolve.tenant.token:confirm_payment` alone puts
+// tenant_id/token_payload on the request; the controller opens its own
+// short, explicit TenantContext::run() calls around the Stripe call.
+Route::middleware(['resolve.tenant.token:confirm_payment'])
     ->post('bookings/{token}/confirm-payment', [PaymentConfirmationController::class, 'store']);
+
+Route::post('admin/login', [AuthController::class, 'adminLogin']);
+
+Route::middleware(['auth'])->post('logout', [AuthController::class, 'logout']);
+
+Route::prefix('owner')
+    ->middleware(['auth', 'role:owner', 'resolve.tenant.from-user', 'tenant.context'])
+    ->group(function () {
+        Route::post('services', [OwnerServiceController::class, 'store']);
+    });
+
+Route::prefix('staff')
+    ->middleware(['auth', 'role:staff', 'resolve.tenant.from-user', 'tenant.context'])
+    ->group(function () {
+        Route::get('appointments', [StaffAppointmentController::class, 'index']);
+    });
+
+Route::prefix('admin/tenants/{tenant}')
+    ->middleware(['auth', 'role:platform_admin', 'resolve.tenant.impersonate', 'tenant.context'])
+    ->group(function () {
+        Route::get('appointments', [AdminAppointmentController::class, 'index']);
+    });

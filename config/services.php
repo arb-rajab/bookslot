@@ -35,4 +35,13 @@ return [
         ],
     ],
 
+    // D-0006/D-0030. STRIPE_APPLICATION_FEE_BPS is the platform's cut of
+    // each deposit, taken via application_fee_amount on the destination
+    // charge — a config value, not a fabricated business number.
+    'stripe' => [
+        'secret_key' => env('STRIPE_SECRET_KEY'),
+        'webhook_secret' => env('STRIPE_WEBHOOK_SECRET'),
+        'application_fee_bps' => (int) env('STRIPE_APPLICATION_FEE_BPS', 0),
+    ],
+
 ];
