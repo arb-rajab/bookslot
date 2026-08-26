@@ -1,38 +1,132 @@
 # Scope and Non-Goals
 > Purpose: prevent scope creep by writing down what this will never do.
 > Project: bookslot (PRIVATE track)
-> Last updated: 2026-08-23 (Session 0/1)
+> Last updated: 2026-08-26 (Session 18 — MVP boundary checklist rewritten as
+> a final accounting; see D-0045, `09-decision-log.md`, for why the build
+> phase closes here rather than this list being carried forward as
+> in-progress)
 
-## MVP boundary (in scope)
+## MVP boundary — final accounting (Session 18 checkpoint)
 
-None of the following is built yet — this is the target boundary for a
-first sellable version, to be implemented in future sessions.
+Sessions 2 through 17 built against the target boundary below. Per
+**D-0045** (`09-decision-log.md`), this checklist is no longer a forward
+target implicitly inviting the next session to keep checking boxes — it is
+a closed, honest accounting of exactly where each item actually stands as
+of this checkpoint. Three states, no fourth: **built and proven**, **not
+built** (stated plainly — never "almost done" when it was never started),
+or **permanently unverifiable by deliberate project-scope choice** (not a
+gap anyone intends to close within this project's lifecycle).
 
-- [ ] Public booking page per business: service list (name, duration,
-      price, deposit amount or %), available slot picker for a given
-      staff/resource.
-- [ ] Deposit collection at booking time via Stripe Connect (fixed amount
-      or percentage of service price, configured per service by the
-      owner).
-- [ ] Automated reminders (email + SMS) at owner-configurable intervals
-      (illustrative default: ~7 days, ~24 hours, ~2 hours before the
-      appointment).
-- [ ] Balance handling at/after the appointment: either an automatic charge
-      of the remaining balance via the customer's saved payment method, or
-      a manual "mark as paid in person" action for the owner.
-- [ ] No-show flagging: owner marks an appointment as a no-show; the
-      deposit's forfeiture/refund behavior is explicit and owner-configured
-      per studio policy, not silently decided by the product.
-- [ ] Single business, single location, one or more staff/resources per
-      business (each with their own calendar) — see non-goals for what
-      "one or more staff" deliberately does not include.
-- [ ] Owner dashboard: calendar view of upcoming appointments, deposit/
-      balance payment status per appointment, basic no-show count.
-- [ ] Post-appointment rebooking prompt: a simple automated message with a
-      link back to the booking page, sent once after a completed
-      appointment.
-- [ ] Stripe Connect (Express) onboarding for the business to receive
-      payouts.
+### Built and proven
+
+Each of these is real, working application code, exercised by an automated
+test that fails if it regresses — not merely coded and assumed correct.
+
+- [x] **Public booking page per business** — service/slot selection against
+      a real derived-availability algorithm (working hours, exceptions,
+      buffer-aware occupancy; D-0039), a real Nuxt page calling the real
+      backend over real HTTP with the real CORS/CSRF/cookie protocol
+      (D-0041, Session 16). *Caveat: see "Permanently unverifiable" below —
+      the page's client-side JavaScript has never executed in an actual
+      browser (R-08).*
+- [x] **Deposit collection at booking time** — an immediate-capture Stripe
+      PaymentIntent (destination charge, `application_fee_amount`) that
+      also saves the payment method for later off-session use (D-0006), a
+      real, tested multi-transaction boundary around the Stripe call
+      (D-0027, D-0030), and a real two-process concurrency test proving the
+      `23P01`/`40P01` → `409 SLOT_ALREADY_BOOKED` guarantee under genuine
+      OS-level concurrency (D-0030). *Caveat: proven against
+      `FakePaymentIntentGateway` only — see "Permanently unverifiable."*
+- [x] **Payment confirmation** — `POST /api/bookings/{token}/confirm-payment`
+      built end to end (D-0021, D-0033), including the payment-method
+      write-back to `payment_mandates` that R-07 exists to guard.
+- [x] **Tenant isolation** — row-level `tenant_id` with a Postgres
+      Row-Level-Security backstop, fail-closed by construction (D-0005,
+      D-0009), a dedicated tenant-isolation test suite (`composer
+      test:tenant-isolation`, 20/20 as of Session 17/18, well under D-0017's
+      60-second budget) — the one correctness property `01`'s original
+      Definition of MVP complete named as non-negotiable, and the one item
+      on this list this project cannot honestly ship without. Built and
+      exhaustively tested, not merely coded.
+- [x] **Owner attendance / no-show marking** — `GET /api/owner/appointments`
+      and `PATCH /api/owner/appointments/{id}/status` (D-0042, Session 17),
+      real writes to the `booking_events` audit trail, a real owner-facing
+      Nuxt dashboard page calling the real backend (Session 17). *Caveat:
+      same browser-execution caveat as the booking page (R-08); the
+      `cancelled` transition and any refund interaction were deliberately
+      left out (D-0042), not built.*
+- [x] **The reconciliation safeguard for R-07** — `mandates:reconcile-backfill`
+      (D-0037), scheduled hourly, flags any `payment_mandates` row whose
+      `stripe_payment_method_id` sits `NULL` past a reasoned 30-minute grace
+      period, tested for the flagged/not-flagged/already-backfilled/
+      cross-tenant cases. This is the half of R-07 that never depended on
+      real Stripe access — built and tested. *A real, named, separate gap:
+      no cron/scheduler process actually runs anywhere yet
+      (`08-deployment-and-operations.md`); the command is eligible to run,
+      not yet wired into a live scheduler.*
+
+### Not built — stated plainly, never started
+
+No partial credit is claimed for any of these. None has so much as a
+migration, a route, or a stub controller behind it.
+
+- [ ] **Automated reminders (email + SMS)** — R-05 and the reminder-cadence
+      value proposition (R-04) remain exactly as unbuilt and as unvalidated
+      as Session 0/1 left them. Zero code exists for this.
+- [ ] **Automatic balance charging** (the off-session charge half of J5) —
+      the *mandate evidence* that would back such a charge is built and
+      tested (D-0010, `payment_mandates`), but the charge itself — actually
+      calling Stripe off-session for the remaining balance — has never been
+      written. "Attended → applied to balance" today means only a status
+      write (D-0042); no money moves.
+- [ ] **Post-appointment rebooking prompt** — zero code. Not started.
+- [ ] **Stripe Connect (Express) onboarding** for a business to receive
+      payouts — zero code. Every booking and payment built so far runs
+      against a single seeded demo tenant with no onboarding flow of its
+      own; there is no path today for a second, real business to connect a
+      Stripe account to this product at all.
+- [ ] **Hold-window expiry enforcement** — D-0011 decided the *mechanism*
+      (a configurable 15-minute hold), but nothing actually releases an
+      expired `pending_payment` slot back to availability. Named again here
+      because it sat in "next recommended session" for multiple sessions
+      running without being picked up.
+- [ ] **No-show count on the owner dashboard** (part of FR-15) — the
+      appointment list and deposit status are real; the summary count is
+      not, in either the API response or the frontend.
+
+### Permanently unverifiable by deliberate project-scope choice
+
+These are not gaps awaiting a future session — they are things this
+project has explicitly decided never to obtain within its own lifecycle,
+recorded so a reader doesn't mistake "untested" for "someone forgot."
+
+- **Real Stripe network behavior** (D-0036) — real API response shapes,
+  real decline codes, real webhook payloads, real latency variance have
+  never been exercised and, per D-0036, never will be: the project owner
+  explicitly, permanently descoped ever obtaining real Stripe test-mode
+  credentials for this portfolio/skill-proof project. Every payment code
+  path is real, correct code (`StripePaymentIntentGateway` exists and is
+  unit-testable) that has simply never spoken to Stripe's actual
+  infrastructure, by deliberate choice, not oversight.
+- **Real browser execution of the frontend** (R-08) — no click, keystroke,
+  or rendered pixel on either the public booking page or the owner
+  dashboard has ever been observed by a real browser or a browser-
+  automation tool; both pages have been proven only at the HTTP-protocol
+  level (real backend requests replicated by script) and via SSR (Node-side
+  Vue rendering with no hydration or event handlers engaged). This item
+  differs from the Stripe one above in mechanism — `10-risk-register.md`
+  still carries R-08 formally "Open," not "will not do," since no one has
+  decided a real browser pass should never happen — but it belongs in this
+  bucket for this checkpoint's purposes anyway: three consecutive sessions
+  that each added a frontend surface checked for browser-automation tooling
+  and found none available, and this project has no standing plan to
+  acquire one. Practically, within this project's actual working
+  conditions to date, it has behaved exactly like a permanently
+  unverifiable item, not a scheduled one — recorded here rather than left
+  to imply it's simply next in line. Should tooling become available, or
+  before either page is shown to a real person, R-08's own entry in
+  `10-risk-register.md` is the authoritative place a future session should
+  act on it.
 
 ## Explicit non-goals
 
@@ -91,3 +185,16 @@ The MVP may be considered pilot-ready only when:
    system.
 4. No item in the non-goals table above has silently crept back into
    scope.
+
+**Session 18 checkpoint note (see D-0045, `09-decision-log.md`):** condition
+1 above, as originally written, is no longer reachable within this
+project's own current scope — D-0036 permanently descoped real Stripe
+test-mode credentials, so "demonstrably working end-to-end against a real
+Stripe test-mode Connect account" cannot happen without a future, separate
+scope change reopening that decision. This definition is left unedited
+above as the honest historical record of what Session 0/1 originally meant
+by "MVP complete" — not rewritten to quietly redefine "complete" downward
+to match what was actually built. The MVP boundary checklist earlier in
+this file is the accurate, current accounting of what exists; this
+Definition of MVP complete is the accurate, current record of a bar that
+was never cleared and, on its own original terms, no longer can be.

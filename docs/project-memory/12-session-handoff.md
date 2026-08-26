@@ -1,5 +1,98 @@
 # Session Handoff
 
+## State of bookslot (Session 18 checkpoint — read this first)
+> A two-minute summary for a fresh reader, or a future session picking this
+> back up. It compresses `09-decision-log.md` (45 entries) and
+> `10-risk-register.md` (R-01 through R-08) — it does not replace them.
+> Every claim below is backed by a full entry in one of those two files;
+> follow the `D-####`/`R-##` references for the complete reasoning,
+> rejected alternatives, and execution evidence. Nothing below is invented
+> for this summary — it is a compression of what those files already say.
+
+**Where this stands, in one paragraph.** `bookslot` is a private-track
+booking-and-deposits product for small appointment-based service
+businesses (illustrative vertical: tattoo studios). Across 17 build
+sessions it grew a real Laravel/PostgreSQL backend and a real Nuxt
+frontend implementing the core booking → deposit → attendance workflow,
+with tenant isolation as its one non-negotiable, exhaustively-tested
+correctness property. As of this session (Session 18, 2026-08-26), the
+build phase is deliberately paused at an honest checkpoint — see D-0045
+below — not because the work is finished, but because `00-project-brief.md`'s
+own Session 0/1 risk note said recruiting a real pilot studio should come
+before more feature building, and 17 sessions never did that.
+
+**Why building stops here (D-0045).** Session 0/1's Feasibility Notes named
+one standing top priority: *"recruiting one real pilot studio... not
+building more MVP features against untested assumptions."* `10-risk-
+register.md`'s R-01 restates this as the standing top risk, unchanged
+across every one of the 17 build sessions since. This session (18) closes
+that loop honestly rather than silently continuing: no more MVP feature
+work is added until a future session either brings a real pilot, or
+explicitly and consciously decides to keep building without one (see
+Standing rules below). This is the same category of decision as **D-0036**
+(Session 14, permanently descoping real Stripe credentials for this
+portfolio project) and the `privacy-forge` live-demo descoping elsewhere in
+this developer's portfolio — an honest, stated scope boundary, not a
+silent abandonment. Full reasoning: **D-0045**.
+
+**What's real and proven** (see `01-scope-and-non-goals.md`'s MVP boundary
+checklist for the complete, itemized accounting):
+- Public booking page: real derived-availability slot picker (D-0039), real
+  deposit capture via Stripe (fake-tier only — see below), a real Nuxt
+  frontend against the real backend (D-0041).
+- Payment confirmation and the mandate-evidence write-back it depends on
+  (D-0021, D-0033).
+- **Tenant isolation** — row-level `tenant_id` + Postgres RLS, fail-closed
+  by construction (D-0005, D-0009), with a dedicated, exhaustively tested
+  suite. The one property this product cannot ship without, and the one
+  most thoroughly proven.
+- Owner dashboard: appointment listing, mark-attended/no-show, a real audit
+  trail (D-0042), plus a serious pre-existing owner/staff re-auth bug found
+  and fixed by this session's own verification discipline (D-0043, guarded
+  against regression by D-0044).
+- The R-07 reconciliation safeguard (`mandates:reconcile-backfill`, D-0037)
+  — hourly, tested, though not yet wired into a live cron.
+
+**What was never started — no partial credit claimed:** automated
+reminders (R-04/R-05), automatic balance charging (the off-session charge
+half of J5), the post-appointment rebooking prompt, Stripe Connect
+onboarding, and hold-window expiry enforcement. Each has zero code behind
+it — see `01`'s checklist for the itemized "not built" list.
+
+**What's permanently out of reach by deliberate scope choice, not
+oversight:**
+- **Real Stripe network behavior (D-0036).** The project owner permanently
+  descoped ever obtaining real Stripe test-mode credentials for this
+  portfolio project. Every Stripe code path is real, correct code, proven
+  self-consistent against a fake gateway, and will never speak to Stripe's
+  actual infrastructure within this project's lifecycle.
+- **Real browser execution of the frontend (R-08).** Three sessions in a
+  row added a frontend surface, checked for browser-automation tooling, and
+  found none available. Formally still "Open" in the risk register (unlike
+  the Stripe item, no one has decided this should never happen) — but
+  practically, to date, it has behaved the same way. Both public-facing
+  pages have been proven only at the HTTP-protocol level and via SSR, never
+  by an actual click.
+
+**The full risk register, compressed** (`10-risk-register.md` has the
+complete mitigation/status/review-date table for each):
+| ID | Risk | Status, in short |
+|---|---|---|
+| R-01 | No real pilot exists; every business assumption is reasoned, not validated | Open — the standing top risk; unaddressed across 17 build sessions, which is the direct cause of this checkpoint (D-0045) |
+| R-02 | Multi-tenancy is new territory for this developer | Mitigated in code — dedicated, exhaustive tenant-isolation suite exists and passes |
+| R-03 | Stripe Connect onboarding friction may block adoption | Open — unvalidated, needs a real pilot's onboarding attempt |
+| R-04 | Reminders may not measurably reduce no-shows | Open — unvalidated *and* unbuilt (reminders don't exist yet) |
+| R-05 | Email/SMS deliverability could silently undermine reminders | Open — moot until reminders are built |
+| R-06 | Price-sensitive buyer may not tolerate the pricing model | Open — unvalidated, needs a real pricing conversation |
+| R-07 | Silent divergence between our DB and Stripe's real payment-method state | **Detection mitigation built and tested** (D-0037); real-Stripe-verification half permanently accepted as residual risk (D-0036) |
+| R-08 | Frontend never exercised by a real browser | Open, widened across two pages (Session 16, 17) — see "permanently out of reach" above for its practical status |
+
+**Standing instruction for whoever reads this next:** see "Standing rules"
+immediately below — resuming feature work on `bookslot` requires reading
+this checkpoint and this session's D-0045 first, and making an explicit,
+stated choice about whether to keep building without a pilot, not silently
+picking up where Session 17 left off.
+
 ## Standing rules
 
 - **Every bookslot session ends with a real git commit (and push, if a
@@ -21,6 +114,23 @@
   appears in any of them) — this was a **process gap** (no commit step was
   ever part of a session's defined scope), not a documentation-integrity
   problem. This rule closes that gap going forward.
+- **A future session resuming `bookslot`'s feature development must read
+  the "State of bookslot" checkpoint above and `09-decision-log.md`'s
+  D-0045 first, and make its own explicit, stated choice before writing any
+  application code** — either (a) a real pilot studio is now in hand, the
+  condition R-01 has always named, and the session says so; (b) no pilot
+  exists yet, and the session is a deliberate, conscious decision to keep
+  building against unvalidated assumptions anyway, stated in that session's
+  own words, not silently resumed as if Session 18 never happened; or (c)
+  `bookslot` is being treated as complete for portfolio purposes and the
+  session is doing something else with it entirely. Added 2026-08-26 (same
+  session as D-0045) for the same reason as the commit rule above: a
+  default that closes a gap in kind — 17 sessions in a row treated "keep
+  building" as the unexamined default despite R-01 saying otherwise the
+  entire time, and nothing in this pack's process stopped that from
+  happening an 18th time except a human reading every prior handoff's "next
+  recommended session" section closely enough to notice the pattern. This
+  rule makes noticing it structural instead of incidental.
 
 ## Project
 - Repository: `bookslot` (working name — see `00-project-brief.md`),
@@ -30,8 +140,13 @@
 - Product/domain: booking, deposits, and no-show protection for
   appointment-based service businesses (illustrative vertical: tattoo
   studios — see `00-project-brief.md`)
-- Current version or branch: `main`, no tags. Application code exists as of
-  Session 10: Laravel API scaffold, database schema/migrations, tenant-context
+- Current version or branch: `main`, tagged `v0.1.0-mvp-checkpoint` as of
+  Session 18 (see this file's Session 18 amendment for why, and the "State
+  of bookslot" section at the top of this file for the current, accurate
+  accounting — the paragraph below is left as the historical Session-10
+  snapshot it was written as, not updated in place session by session).
+  Application code exists as of Session 10: Laravel API scaffold, database
+  schema/migrations, tenant-context
   plumbing wired into a real HTTP request lifecycle for all four
   tenant-resolution mechanisms (slug-based; the D-0021 signed-token class;
   D-0029's resolve-from-authenticated-user and admin-impersonation
@@ -1217,3 +1332,91 @@ exactly as `04`/`07`/`09` describe.
 **Standing-rule note:** this session found `12-session-handoff.md`'s Standing Rules section (added in a prior review, git-diff showed it uncommitted at this session's start) still not committed — folded into this session's own commit below, rather than left pending across yet another session.
 
 **Next recommended session:** as in every prior handoff, a real candidate pilot studio becoming available should take priority over further build work — R-01 remains the standing top risk, now untouched by twelve sessions in a row. Absent that: **closing R-08** remains the single most load-bearing next step (now covering two unverified-by-browser pages, not one) — every session that adds a third frontend surface without closing it first compounds the same gap; the hold-window expiry job (D-0011's mechanism was decided, nothing enforces it yet); or `cancelled`/refund handling for the owner endpoint this session deliberately left out (D-0042). Each is a clean, bounded next step.
+
+## Amendment (Session 18, 2026-08-26) — MVP checkpoint: building stops here, documentation-only
+
+**Objective, as given:** close the current build phase at an honest MVP
+checkpoint — not because `bookslot` is finished, but because Session 0/1's
+own Feasibility Notes named recruiting a real pilot studio as the single
+highest-priority next step, "not building more MVP features against
+untested assumptions," and that step went unaddressed for 17 sessions of
+continued feature building. This is documentation and accounting only: no
+application code changes, no new features. Scope: (1) a decision-log entry
+recording the checkpoint decision itself; (2) a rewritten `01-scope-and-
+non-goals.md` MVP boundary checklist giving a precise, final accounting;
+(3) a "State of bookslot" summary consolidating the risk register and
+decision log at the top of this file; (4) a standing-rules update requiring
+a future session to consciously decide whether to keep building without a
+pilot; (5) a judgment call on whether a lightweight version tag is
+proportionate here.
+
+**What was built — nothing. What was written:**
+- **D-0045** (`09-decision-log.md`) — the checkpoint decision itself,
+  citing Session 0/1's Feasibility Notes and R-01 directly, and drawing the
+  explicit parallel to D-0036 (Stripe-credentials descoping) and
+  `privacy-forge`'s live-demo descoping precedent: the same category of
+  honest scope decision, not a new kind of gap. States plainly what is and
+  isn't being decided (R-01 through R-06 remain exactly as open as before —
+  this entry doesn't resolve them, it stops building past them) and records
+  the standing obligation on whoever resumes feature work next.
+- **`01-scope-and-non-goals.md`** — the MVP boundary checklist rewritten
+  from an aspirational, partially-checked list into a three-bucket final
+  accounting: built-and-proven (booking, deposit capture, payment
+  confirmation, tenant isolation, owner attendance/no-show marking, the
+  R-07 reconciliation safeguard), not-built-stated-plainly (reminders,
+  automatic balance charging, rebooking prompts, Stripe Connect onboarding,
+  hold-window expiry, the FR-15 no-show count — each named as never started,
+  not "almost done"), and permanently-unverifiable-by-scope-choice (real
+  Stripe network behavior per D-0036; real browser execution of the
+  frontend per R-08, with the honest caveat that R-08 is formally still
+  "Open" in the risk register even though it has behaved the same way
+  practically across three sessions). A checkpoint note was also added
+  under the original "Definition of MVP complete" section, since that
+  definition's own condition 1 (real Stripe Connect validation) is no
+  longer reachable given D-0036 — left unedited as the honest historical
+  record, not quietly redefined downward.
+- **This file** — the "State of bookslot" summary added at the top (a
+  two-minute compression of all 45 decision-log entries and all eight
+  risk-register rows, explicitly not a replacement for either), and a new
+  Standing Rules bullet requiring a future session to read this checkpoint
+  and D-0045 before resuming feature work, and to state explicitly which of
+  three paths it's taking (real pilot in hand; deliberately continuing
+  without one; or treating this as done for portfolio purposes) rather than
+  silently resuming as if Session 18 never happened.
+
+**Version tagging — judgment call made, reasoning stated:** tagged this
+checkpoint commit `v0.1.0-mvp-checkpoint` (lightweight annotated tag, not
+full semver ceremony). Reasoning: this is a private repository with no
+package consumers and no release process to version against — full semver
+(with its implied promise of subsequent `v0.1.1` patches, a changelog
+process, etc.) would be ceremony this project doesn't need. But a durable,
+zero-effort pointer to "exactly what commit this checkpoint's documentation
+describes" is proportionate and cheap, mirroring `privacy-forge`'s
+`v1.0.0` precedent at a scale that matches an MVP checkpoint rather than a
+finished release. `CHANGELOG.md` gained a matching entry under this
+version heading rather than staying in `[Unreleased]` forever, for the same
+reason.
+
+**Validation performed:** `composer ci:check` run before any file was
+touched (77/77 Pest tests, 422 assertions, Pint/PHPStan clean) to confirm
+the baseline this checkpoint describes is accurate and undisturbed by this
+session's documentation-only work. Not re-run after, since no application
+code changed — nothing in this session's diff could affect test outcomes.
+
+**Files touched this session:** `09-decision-log.md` (D-0045),
+`01-scope-and-non-goals.md` (MVP boundary checklist rewrite, Definition-of-
+MVP-complete checkpoint note), `12-session-handoff.md` (this file — "State
+of bookslot" summary, Standing Rules addition, this amendment),
+`CHANGELOG.md` (checkpoint entry). **Not touched:** `10-risk-register.md`
+(deliberately — the risks themselves are unchanged by this checkpoint;
+summarizing them in this file's new section required no edit to their
+source of record), `11-backlog.md`, any application code, `privacy-forge`,
+`laravel-consent-guard`.
+
+**Next recommended session:** unchanged in substance from every prior
+handoff, restated once more because it is now the explicit standing
+instruction rather than a repeated suggestion — see the new Standing Rules
+bullet above. A real candidate pilot studio becoming available should take
+priority over anything else. Absent that, the next session must open by
+reading this checkpoint and D-0045, and state explicitly which of the three
+named paths it's taking before writing any application code.
