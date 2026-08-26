@@ -1,7 +1,19 @@
 # API / Event Contracts
 > Purpose: the interface others depend on.
 > Project: bookslot (PRIVATE track)
-> Last updated: 2026-08-26 (Session 2 — Requirements and Data Model; amended Session 5 — mandate acceptance field added, FR-16 scope resolved; amended Session 6 — reconciled against D-0009/D-0012/D-0014, webhook coverage for the off-session balance charge clarified; amended Session 7 — endpoint 3 redesigned around D-0021's booking-scoped token, closing the tenant-context gap Session 6 raised and didn't fix; amended Session 9 — three endpoints actually implemented for the first time, with two real gaps found and raised rather than invented; amended Session 10 — both Session 9 gaps closed: auth wired (D-0029), booking creation built for real (D-0030); amended Session 16 — endpoint 1 (availability) built for real (D-0039), first real frontend consumer, a real CSRF-on-public-endpoints finding recorded (D-0041))
+> Last updated: 2026-08-26 (Session 2 — Requirements and Data Model; amended Session 5 — mandate acceptance field added, FR-16 scope resolved; amended Session 6 — reconciled against D-0009/D-0012/D-0014, webhook coverage for the off-session balance charge clarified; amended Session 7 — endpoint 3 redesigned around D-0021's booking-scoped token, closing the tenant-context gap Session 6 raised and didn't fix; amended Session 9 — three endpoints actually implemented for the first time, with two real gaps found and raised rather than invented; amended Session 10 — both Session 9 gaps closed: auth wired (D-0029), booking creation built for real (D-0030); amended Session 16 — endpoint 1 (availability) built for real (D-0039), first real frontend consumer, a real CSRF-on-public-endpoints finding recorded (D-0041); amended Session 17 — the owner appointment list/status endpoints built (D-0042), a serious pre-existing owner/staff re-authentication bug found and fixed (D-0043))
+
+## Amendment (Session 17, 2026-08-26) — owner dashboard endpoints built; a real, previously-undetected owner/staff auth bug found and fixed
+
+**Objective, for context:** close the one piece of the critical workflow (`00-project-brief.md`, `01-scope-and-non-goals.md`'s Definition of MVP complete) that had no owner-facing surface at all — a studio owner had no way to see a booking or mark attendance. Built `GET /api/owner/appointments` and `PATCH /api/owner/appointments/{id}/status` (`completed`/`no_show` only — see D-0042 for why `cancelled` was deliberately left out), plus the first real owner-dashboard frontend page (`frontend/app/pages/owner/index.vue`).
+
+**The real finding, discovered only by testing this against a live `php artisan serve` process (not just Pest) for the first time:** a returning owner/staff session could never re-authenticate on any request after the first — a bug present since D-0029 (Session 10) in every owner/staff route this codebase has ever built, invisible to every prior session's Pest-only verification. Full root cause, two rejected fix attempts, and the actual fix (one consolidated `auth.tenant` middleware, session-based tenant resolution): **D-0043**. This is the single most significant finding of this session — everything built on top of it (including this session's own new endpoints) was unreachable by a real browser or a real second HTTP request until it was fixed.
+
+**Verified end to end against the real running API, not just the test suite:** a real login → `GET /api/owner/appointments` (real customer/service/staff names, real deposit status) → `PATCH .../status` (real `completed` transition, verified via direct database read that a `booking_events` row was created and no `payments`/`refunds` row was) → the same invalid-transition case rejected with `409`, all via real HTTP requests replicating the frontend's exact CORS/CSRF/cookie protocol — the same Claim-A methodology Session 16 established. Repeated with both `SESSION_DRIVER=redis` and `SESSION_DRIVER=file` locally to isolate the auth-ordering bug from the local Redis/predis setup D-0041 already flagged as environment-specific.
+
+**A second, smaller finding fixed along the way:** any authenticated route hit by a client that doesn't send `Accept: application/json` (a bare `curl`, not this project's own frontend/tests) crashed `500` instead of returning a clean `401` — Laravel's default `Authenticate::redirectTo()` tries to build a `route('login')` URL this API-only app has never had. Fixed in `bootstrap/app.php` (`redirectGuestsTo(fn () => null)` plus a structured `{"error": "UNAUTHENTICATED"}` renderer for `AuthenticationException`), found the same way as D-0043 — by hitting the real server, not by reading the code.
+
+**Files touched (API-contract-relevant only — see the handoff for the complete list):** `app/Http/Controllers/Api/Owner/AppointmentController.php` (new), `app/Http/Middleware/AuthenticateTenantUser.php` (new, replaces the deleted `ResolveTenantFromAuthenticatedUser.php`), `app/Http/Controllers/Api/AuthController.php` (session now carries `tenant_id`), `bootstrap/app.php`, `routes/api.php`, `database/seeders/DatabaseSeeder.php` (a real owner login + demo appointments), `frontend/app/pages/owner/index.vue` (new), `tests/Feature/Api/OwnerAppointmentControllerTest.php` (new), this file, `09-decision-log.md` (D-0042, D-0043).
 
 ## Amendment (Session 16, 2026-08-26) — availability built; the first real frontend consumer; public endpoints found to still require Sanctum's CSRF cookie
 
@@ -138,8 +150,8 @@ and rate-limit numbers are still future-session work (see Deferred below).
 
 | Method & path | Purpose |
 |---|---|
-| `GET /api/owner/appointments?from=&to=&status=` | Dashboard calendar/list view |
-| `PATCH /api/owner/appointments/{id}/status` | Mark `completed` / `no_show` / `cancelled` |
+| `GET /api/owner/appointments?from=&to=&status=` | Dashboard calendar/list view — **built Session 17, D-0042**, own tenant's appointments across every staff member (D-0013's own-bookings narrowing is a staff rule, not an owner one) |
+| `PATCH /api/owner/appointments/{id}/status` | Mark `completed` / `no_show` — **`completed`/`no_show` built Session 17, D-0042**; `cancelled` deliberately not accepted by this endpoint yet, see D-0042 |
 | `POST /api/owner/appointments/{id}/refund` | Issue a full/partial refund on the deposit |
 | `POST /api/owner/appointments/{id}/balance/charge` | Trigger the off-session balance charge |
 | `POST /api/owner/appointments/{id}/balance/mark-paid` | Record a manual (in-person) balance payment |
@@ -299,21 +311,33 @@ different card, per J2, using the same token again.
   appointment to `cancelled` — distinct from `SLOT_ALREADY_BOOKED`, since
   this is "your own hold expired," not "someone else won the race."
 
-### 4. `PATCH /api/owner/appointments/{id}/status`
+### 4. `PATCH /api/owner/appointments/{id}/status` — `completed`/`no_show` built Session 17, D-0042
 
-**Request:** `{ "status": "no_show" }` or `{ "status": "completed" }` or
-`{ "status": "cancelled", "reason": "…" }`.
+**Request:** `{ "status": "no_show" }` or `{ "status": "completed" }`.
+`{ "status": "cancelled", "reason": "…" }` is documented here as a future
+target (J7) but is **not** accepted by the built endpoint — see D-0042 for
+why it was deliberately left out this session (a distinct workflow with its
+own refund considerations, not yet reasoned through).
 
-**Response `200`:** the updated appointment. If `completed` and the
-studio's balance policy is auto-charge, this endpoint's response also
-reflects the resulting balance-payment attempt outcome (see endpoint 6)
-rather than requiring a second round trip.
+**Response `200`:** the updated appointment, as a flattened projection —
+`{ "id", "status", "starts_at", "ends_at", "customer_name", "service_name", "staff_name", "deposit_status" }`
+— not the raw Eloquent row. `deposit_status` is `null` if no deposit
+payment row exists yet. Auto-charge balance handling on `completed` (the
+original draft of this row) is **not** built — that's J5's off-session
+balance charge, explicitly out of this session's scope; marking `completed`
+is bookkeeping only, per D-0006 (no Stripe call, no `payments`/`refunds`
+row — see D-0042).
 
-**Errors:** `409 { "error": "INVALID_STATUS_TRANSITION" }` — e.g. attempting
-to mark `completed` a booking that's still `pending_payment` (04's state
-machine doesn't allow it); `403` if the appointment doesn't belong to the
-caller's tenant (defense-in-depth on top of RLS — this should be
-unreachable, and its being reachable is itself a signal worth alerting on).
+**Errors:** `409 { "error": "INVALID_STATUS_TRANSITION" }` — the only valid
+prior status for either target is `confirmed` (04's state machine names
+exactly one incoming transition for each), so e.g. attempting to mark
+`completed` a booking that's still `pending_payment`, or re-marking an
+already-`completed`/`no_show` appointment, both get this. `404
+{ "error": "NOT_FOUND" }` — **corrected Session 17 from this row's original
+`403`** — an appointment belonging to another tenant is invisible to a
+`BelongsToTenant` + RLS-scoped lookup, indistinguishable from a nonexistent
+one, matching every other tenant-scoped controller in this codebase (not a
+`403`, which would require an out-of-scope cross-tenant existence check).
 
 ### 5. `POST /api/owner/appointments/{id}/refund`
 

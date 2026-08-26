@@ -45,3 +45,24 @@ export interface ConfirmPaymentResponse {
     message: string | null
   }
 }
+
+// Owner dashboard (05-api-contracts.md endpoint 4, D-0042) — a flattened
+// projection of an appointment, not the raw Eloquent model shape.
+export interface OwnerAppointment {
+  id: string
+  status: string
+  starts_at: string
+  ends_at: string
+  customer_name: string | null
+  service_name: string | null
+  staff_name: string | null
+  deposit_status: string | null
+}
+
+export interface OwnerUser {
+  id: string
+  role: string
+  tenant_id: string | null
+  name: string
+  email: string
+}

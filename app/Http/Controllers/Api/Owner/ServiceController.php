@@ -11,8 +11,8 @@ use Illuminate\Validation\Rule;
 /**
  * POST /api/owner/services (05-api-contracts.md endpoint 8, D-0012). First
  * real owner-authenticated route in this repository — gated by `auth`,
- * `role:owner`, `resolve.tenant.from-user`, `tenant.context` (D-0029), in
- * that order. buffer_before_minutes/buffer_after_minutes are required with
+ * `auth.tenant`, `role:owner` (D-0029; consolidated into one middleware by
+ * D-0043). buffer_before_minutes/buffer_after_minutes are required with
  * no default on creation, per D-0012 — validated explicitly here rather
  * than left to the DB's own NOT NULL to surface as a generic 500.
  */

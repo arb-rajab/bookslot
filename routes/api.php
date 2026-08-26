@@ -6,6 +6,7 @@ use App\Http\Controllers\Api\AvailabilityController;
 use App\Http\Controllers\Api\BookingController;
 use App\Http\Controllers\Api\ManageBookingController;
 use App\Http\Controllers\Api\MandateController;
+use App\Http\Controllers\Api\Owner\AppointmentController as OwnerAppointmentController;
 use App\Http\Controllers\Api\Owner\ServiceController as OwnerServiceController;
 use App\Http\Controllers\Api\PaymentConfirmationController;
 use App\Http\Controllers\Api\ServiceController;
@@ -19,10 +20,11 @@ use Illuminate\Support\Facades\Route;
 |
 | Public routes cover D-0009's two original tenant-resolution mechanisms:
 | slug-based, and the signed-token capability class (generalized by
-| D-0021). Authenticated owner/staff/platform-admin routes (D-0029, this
-| session) add the other two: resolve.tenant.from-user and
-| resolve.tenant.impersonate. See bootstrap/app.php's middleware-alias
-| comment for the full ordering rationale per route type.
+| D-0021). Authenticated owner/staff routes use `auth.tenant` (D-0043) — a
+| single consolidated middleware, not a separate auth/tenant-resolution
+| pair — platform-admin keeps its own separate auth/role/resolve.tenant.
+| impersonate pipeline. See bootstrap/app.php's middleware-alias comment
+| for the full rationale.
 |
 */
 
@@ -61,13 +63,15 @@ Route::post('admin/login', [AuthController::class, 'adminLogin']);
 Route::middleware(['auth'])->post('logout', [AuthController::class, 'logout']);
 
 Route::prefix('owner')
-    ->middleware(['auth', 'role:owner', 'resolve.tenant.from-user', 'tenant.context'])
+    ->middleware(['auth.tenant', 'role:owner'])
     ->group(function () {
         Route::post('services', [OwnerServiceController::class, 'store']);
+        Route::get('appointments', [OwnerAppointmentController::class, 'index']);
+        Route::patch('appointments/{id}/status', [OwnerAppointmentController::class, 'updateStatus']);
     });
 
 Route::prefix('staff')
-    ->middleware(['auth', 'role:staff', 'resolve.tenant.from-user', 'tenant.context'])
+    ->middleware(['auth.tenant', 'role:staff'])
     ->group(function () {
         Route::get('appointments', [StaffAppointmentController::class, 'index']);
     });

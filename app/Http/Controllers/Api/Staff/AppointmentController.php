@@ -13,7 +13,8 @@ use Illuminate\Http\Request;
  * upcoming bookings only at MVP — resolved, not open (FR-16, D-0013): a
  * staff member never sees another staff member's bookings here, no matter
  * how the query params are set. Gated by `auth`, `role:staff`,
- * `resolve.tenant.from-user`, `tenant.context` (D-0029).
+ * `auth.tenant`, `role:staff` (D-0029; consolidated into one middleware by
+ * D-0043).
  */
 class AppointmentController extends Controller
 {

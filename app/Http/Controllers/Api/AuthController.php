@@ -54,6 +54,11 @@ class AuthController extends Controller
 
         $request->session()->regenerate();
 
+        // D-0043: read back by ResolveTenantFromSession on every later
+        // owner/staff request, since that middleware must run before
+        // `auth` and therefore cannot read $request->user()->tenant_id.
+        $request->session()->put('tenant_id', $user->tenant_id);
+
         return response()->json(['user' => $this->userPayload($user)]);
     }
 

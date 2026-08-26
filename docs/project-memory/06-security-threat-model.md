@@ -1,7 +1,29 @@
 # Security and Threat Model
 > Purpose: what can go wrong, and what stops it.
 > Project: bookslot (PRIVATE track)
-> Last updated: 2026-08-26 (Session 0/1 — design-level only, no code exists yet; amended Session 5 — migrator-credential placement; amended Session 7 — confirm-payment tenant-context fix and an erasure/dispute-evidence carve-out; amended Session 16 — confirmed by execution that CSRF protection covers the public booking endpoints too, not just authenticated ones)
+> Last updated: 2026-08-26 (Session 0/1 — design-level only, no code exists yet; amended Session 5 — migrator-credential placement; amended Session 7 — confirm-payment tenant-context fix and an erasure/dispute-evidence carve-out; amended Session 16 — confirmed by execution that CSRF protection covers the public booking endpoints too, not just authenticated ones; amended Session 17 — a fail-closed owner/staff re-authentication bug found and fixed, D-0043)
+
+## Amendment (Session 17, 2026-08-26) — a fail-closed (not a leak) owner/staff auth bug found and fixed (D-0043)
+
+Found while building the owner dashboard and testing it against a real,
+separate `php artisan serve` process for the first time (not just Pest): a
+returning owner/staff session could never re-authenticate on any request
+after the first, because `auth` ran before tenant context existed and
+`users`' RLS policy hides any non-`platform_admin` row until a tenant GUC
+is set. **This was never a security leak — the opposite failure mode**: it
+made every owner/staff route past the first request fail closed with `401`
+rather than expose anything to the wrong tenant or an unauthenticated
+caller. Recorded here, not just in `09-decision-log.md`'s D-0043, because
+it touches this file's own subject matter directly: it is a concrete,
+executed instance of D-0005's two-layer isolation (app-layer scope + RLS)
+interacting with the *authentication* layer in a way no design session had
+reasoned through — the `users` table's RLS policy was designed to protect
+tenant data, not anticipated as a precondition for authentication itself
+to function. The fix (D-0043: session-based tenant resolution, one
+consolidated `AuthenticateTenantUser` middleware) introduces no new
+RLS-bypass surface — D-0009's "exactly one bypass surface
+(`bookslot_migrator`), never live-reachable" invariant is unchanged and was
+not reconsidered.
 
 ## Amendment (Session 16, 2026-08-26) — CSRF confirmed to cover public endpoints, not just authenticated ones (D-0041)
 

@@ -1,11 +1,12 @@
 <?php
 
+use App\Http\Middleware\AuthenticateTenantUser;
 use App\Http\Middleware\EnsureRole;
 use App\Http\Middleware\ResolveTenantForAdminImpersonation;
-use App\Http\Middleware\ResolveTenantFromAuthenticatedUser;
 use App\Http\Middleware\ResolveTenantFromSignedToken;
 use App\Http\Middleware\ResolveTenantFromSlug;
 use App\Http\Middleware\SetTenantContext;
+use Illuminate\Auth\AuthenticationException;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -37,34 +38,67 @@ return Application::configure(basePath: dirname(__DIR__))
             EnsureFrontendRequestsAreStateful::class,
         ]);
 
-        // tenant.context: SetTenantContext, applied to every route in
+        // tenant.context: SetTenantContext, applied to every PUBLIC route in
         // routes/api.php that needs tenant context — always preceded by one
         // of the resolve.tenant.* middleware below, which is what actually
         // puts tenant_id onto the request for it to consume (see
         // SetTenantContext's own docblock: it fails closed if nothing did).
+        // Owner/staff routes use `auth.tenant` instead (below) — a single
+        // consolidated middleware, not this same pair.
         //
-        // Four resolve.tenant.* mechanisms now exist. Two are D-0009's
-        // original public-path mechanisms (slug-based; the signed-token
-        // capability class generalized by D-0021). Two are new this
-        // session (D-0029), now that Sanctum SPA auth exists to build them
-        // against: resolve.tenant.from-user (authenticated owner/staff —
-        // tenant context is a property of who's authenticated, derived
-        // from the user's own tenant_id, never client input) and
-        // resolve.tenant.impersonate (platform-admin — D-0009's
-        // impersonation path, tenant resolved from the route's own
-        // {tenant} parameter, reachable only after role:platform_admin has
-        // already run). Ordering, per route type:
-        //   public:        resolve.tenant.slug|token -> tenant.context
-        //   owner/staff:   auth -> role:owner,staff -> resolve.tenant.from-user -> tenant.context
-        //   platform-admin: auth -> role:platform_admin -> resolve.tenant.impersonate -> tenant.context
+        // public:        resolve.tenant.slug|token -> tenant.context
+        // owner/staff:    auth.tenant -> role:owner,staff
+        // platform-admin: auth -> role:platform_admin -> resolve.tenant.impersonate -> tenant.context
+        //
+        // D-0043 (amends D-0029): owner/staff was originally
+        // auth -> role -> resolve.tenant.from-user -> tenant.context,
+        // reading tenant_id from $request->user(). That's unreachable in
+        // production — `users` carries RLS's standard tenant_id policy for
+        // any non-platform_admin row, so with no GUC set yet (nothing has
+        // set one at that point in the pipeline), `auth`'s own user lookup
+        // finds nothing and every returning owner/staff session fails to
+        // re-authenticate on any request after the first. platform-admin
+        // is unaffected — RLS's widened `users` policy makes that role's
+        // own row visible unconditionally, regardless of GUC state.
+        //
+        // The obvious-looking fix — split into resolve-tenant-from-session
+        // and tenant.context middleware, ordered before `auth` in the route
+        // array — does NOT work: Laravel's global middleware PRIORITY list
+        // (unrelated to a route's own array order) places `Authenticate`
+        // ahead of any middleware not itself in that list, and extending
+        // the priority list to compensate has non-local effects on
+        // unrelated routes (confirmed by executing it — Sanctum's own
+        // nested stateful-group pipeline resorts against the same global
+        // list). `AuthenticateTenantUser` sidesteps this by doing
+        // everything — session-based tenant resolution, TenantContext::run,
+        // and the auth check — inside one middleware's handle(), so there
+        // is nothing left for cross-middleware sorting to get wrong. See
+        // its own docblock for the full finding and rejected alternatives.
         $middleware->alias([
             'tenant.context' => SetTenantContext::class,
             'resolve.tenant.slug' => ResolveTenantFromSlug::class,
             'resolve.tenant.token' => ResolveTenantFromSignedToken::class,
-            'resolve.tenant.from-user' => ResolveTenantFromAuthenticatedUser::class,
+            'auth.tenant' => AuthenticateTenantUser::class,
             'resolve.tenant.impersonate' => ResolveTenantForAdminImpersonation::class,
             'role' => EnsureRole::class,
         ]);
+
+        // This app is API-only — there is no web `login` route to send an
+        // unauthenticated request to (D-0029's owner/staff/platform_admin
+        // dashboards are all client-side fetch behind Sanctum, per
+        // 05-api-contracts.md's rendering-strategy table). Without this,
+        // Laravel's default Authenticate::redirectTo() tries to build a
+        // `route('login')` URL for any request that doesn't explicitly send
+        // `Accept: application/json` and crashes with a 500
+        // RouteNotFoundException instead of a clean 401 — found this
+        // session by hitting an authenticated route with plain curl (no
+        // Accept header), not by reading the code. Every real client this
+        // API actually serves (ofetch, Pest's getJson/postJson helpers)
+        // already sets that header itself, so this was invisible to every
+        // prior session's tests; a bare/misconfigured client shouldn't get
+        // a 500 for the crime of not setting a header this API doesn't
+        // otherwise require.
+        $middleware->redirectGuestsTo(fn () => null);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(
@@ -101,6 +135,17 @@ return Application::configure(basePath: dirname(__DIR__))
         $exceptions->render(function (NotFoundHttpException $e, Request $request) {
             if ($request->is('api/*') || $request->expectsJson()) {
                 return response()->json(['error' => 'NOT_FOUND'], 404);
+            }
+        });
+
+        // Same structured shape as AuthController's own hand-built
+        // {"error": "INVALID_CREDENTIALS"} and EnsureRole's
+        // {"error": "FORBIDDEN"} — an unauthenticated request to any
+        // auth-gated route (owner/staff/platform_admin) gets the same
+        // convention, not Laravel's default {"message": "Unauthenticated."}.
+        $exceptions->render(function (AuthenticationException $e, Request $request) {
+            if ($request->is('api/*') || $request->expectsJson()) {
+                return response()->json(['error' => 'UNAUTHENTICATED'], 401);
             }
         });
     })->create();

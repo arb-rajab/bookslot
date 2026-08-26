@@ -5,10 +5,13 @@ Laravel API + Nuxt frontend, in this same repository — see that file's
 Session 16 amendment for the monorepo-vs-separate-repo reasoning). Calls
 the real Laravel API in `../`, never a mock.
 
-Currently one real page: the public booking flow at `/tenants/{slug}`
+Currently two real pages: the public booking flow at `/tenants/{slug}`
 (services -> slot picker -> booking form with mandate consent -> deposit
-payment confirmation). See `docs/project-memory/12-session-handoff.md`'s
-Session 16 amendment for exactly what's built vs. still missing.
+payment confirmation), and the owner dashboard at `/owner` (log in with a
+studio slug + owner credentials -> list of the tenant's appointments ->
+mark an appointment attended/no-show). See
+`docs/project-memory/12-session-handoff.md`'s Session 16/17 amendments for
+exactly what's built vs. still missing.
 
 ## Setup
 
@@ -24,14 +27,16 @@ runs somewhere else.
 
 Requires the Laravel API running (`php artisan serve` from the repository
 root) against a migrated, seeded database (`php artisan migrate && php
-artisan db:seed` — the seeder creates a real bookable `demo-studio` tenant,
-since there's no owner dashboard yet to create one through).
+artisan db:seed` — the seeder creates a real bookable `demo-studio` tenant
+and an owner login, `owner@demo-studio.test` / `password`, local/testing
+only).
 
 ```bash
 npm run dev
 ```
 
-Then visit `http://localhost:3000/tenants/demo-studio`.
+Then visit `http://localhost:3000/tenants/demo-studio` for the booking
+flow, or `http://localhost:3000/owner` for the owner dashboard.
 
 ## Production build / typecheck
 
