@@ -5,10 +5,11 @@ use App\Models\PaymentMandate;
 use App\Models\StripeWebhookEvent;
 use App\Models\Tenant;
 use App\Tenancy\TenantContext;
+use Illuminate\Contracts\Http\Kernel;
+use Illuminate\Http\Request;
 use Illuminate\Testing\TestResponse;
 use Tests\Support\BookingFixture;
 use Tests\Support\StripeWebhookSignature;
-use Tests\TestCase;
 
 /**
  * D-0048 (docs/project-memory/09-decision-log.md), J9 (02-requirements.md).
@@ -38,22 +39,28 @@ function paymentIntentEventPayload(string $type, string $paymentIntentId, string
 
 // Pest\Laravel\postJson always JSON-encodes its $data argument, which would
 // double-encode our already-JSON payload and break the signature (it must
-// be computed over the exact bytes Stripe would send) — call the
-// underlying test-client method directly with a raw body instead. Takes
-// the bound TestCase explicitly (call sites pass $this from inside a
-// test() closure) rather than using the global test() helper — Larastan
-// cannot resolve ->call() through test()'s own Pest\PendingCalls\TestCall
-// return type, but resolves it fine on a statically-typed TestCase.
-function postRawSignedWebhook(TestCase $test, string $payload): TestResponse
+// be computed over the exact bytes Stripe would send). Dispatches through
+// the real HTTP kernel directly rather than $this->call() — inside a
+// test() closure, $this is typed by Larastan as Pest's own
+// Pest\PendingCalls\TestCall wrapper, not the bound TestCase, so no method
+// call through it resolves statically regardless of how it's passed
+// around. This mirrors tests/Support/concurrency/probe.php's own
+// $kernel->handle($request) pattern, just in-process rather than in a
+// spawned subprocess.
+function postRawSignedWebhook(string $payload): TestResponse
 {
     $secret = config('services.stripe.webhook_secret');
     $header = StripeWebhookSignature::header($payload, $secret);
 
-    return $test->call('POST', '/api/webhooks/stripe', server: [
+    $request = Request::create('/api/webhooks/stripe', 'POST', server: [
         'HTTP_STRIPE_SIGNATURE' => $header,
         'CONTENT_TYPE' => 'application/json',
         'HTTP_ACCEPT' => 'application/json',
     ], content: $payload);
+
+    $response = app(Kernel::class)->handle($request);
+
+    return TestResponse::fromBaseResponse($response);
 }
 
 test('a valid payment_intent.succeeded webhook confirms a still-pending appointment and backfills the payment method', function () {
@@ -66,7 +73,7 @@ test('a valid payment_intent.succeeded webhook confirms a still-pending appointm
 
     $payload = paymentIntentEventPayload('payment_intent.succeeded', 'pi_webhook_test_1', $tenant->id, $appointment->id);
 
-    $response = postRawSignedWebhook($this, $payload);
+    $response = postRawSignedWebhook($payload);
 
     $response->assertOk();
     $response->assertJson(['status' => 'accepted']);
@@ -91,7 +98,7 @@ test('a late-arriving payment_intent.succeeded webhook is a no-op when confirm-p
 
     $payload = paymentIntentEventPayload('payment_intent.succeeded', 'pi_webhook_test_late', $tenant->id, $appointment->id);
 
-    postRawSignedWebhook($this, $payload)->assertOk()->assertJson(['status' => 'accepted']);
+    postRawSignedWebhook($payload)->assertOk()->assertJson(['status' => 'accepted']);
 
     BookingFixture::assertStatus($tenant, $appointment->id, 'confirmed');
 
@@ -115,8 +122,8 @@ test('a duplicate delivery of an already-processed event is acknowledged without
 
     $payload = paymentIntentEventPayload('payment_intent.succeeded', 'pi_webhook_test_dup', $tenant->id, $appointment->id);
 
-    $first = postRawSignedWebhook($this, $payload);
-    $second = postRawSignedWebhook($this, $payload);
+    $first = postRawSignedWebhook($payload);
+    $second = postRawSignedWebhook($payload);
 
     $first->assertOk()->assertJson(['status' => 'accepted']);
     $second->assertOk()->assertJson(['status' => 'already_processed']);
@@ -131,11 +138,13 @@ test('an invalid signature is rejected before anything is recorded', function ()
 
     $payload = paymentIntentEventPayload('payment_intent.succeeded', 'pi_webhook_test_bad_sig', $tenant->id, $appointment->id);
 
-    $response = $this->call('POST', '/api/webhooks/stripe', server: [
+    $request = Request::create('/api/webhooks/stripe', 'POST', server: [
         'HTTP_STRIPE_SIGNATURE' => 't='.time().',v1=0000deadbeef0000',
         'CONTENT_TYPE' => 'application/json',
         'HTTP_ACCEPT' => 'application/json',
     ], content: $payload);
+
+    $response = TestResponse::fromBaseResponse(app(Kernel::class)->handle($request));
 
     $response->assertStatus(400);
     $response->assertJson(['error' => 'INVALID_SIGNATURE']);
@@ -156,7 +165,7 @@ test('payment_intent.payment_failed marks the deposit failed without touching th
         'last_payment_error' => ['code' => 'card_declined', 'message' => 'Your card was declined.'],
     ]);
 
-    postRawSignedWebhook($this, $payload)->assertOk()->assertJson(['status' => 'accepted']);
+    postRawSignedWebhook($payload)->assertOk()->assertJson(['status' => 'accepted']);
 
     BookingFixture::assertStatus($tenant, $appointment->id, 'pending_payment');
 
@@ -174,7 +183,7 @@ test('an event whose payload carries no resolvable tenant_id is recorded but not
         'data' => ['object' => ['id' => 'dp_test_1', 'object' => 'dispute', 'charge' => 'ch_test_1']],
     ], JSON_THROW_ON_ERROR);
 
-    $response = postRawSignedWebhook($this, $payload);
+    $response = postRawSignedWebhook($payload);
 
     $response->assertOk();
     $response->assertJson(['status' => 'recorded_unresolved_tenant']);
@@ -193,7 +202,7 @@ test('tenant A\'s webhook event never touches tenant B\'s appointment, even with
 
     $payload = paymentIntentEventPayload('payment_intent.succeeded', 'pi_webhook_tenant_a', $tenantA->id, $appointmentA->id);
 
-    postRawSignedWebhook($this, $payload)->assertOk();
+    postRawSignedWebhook($payload)->assertOk();
 
     BookingFixture::assertStatus($tenantA, $appointmentA->id, 'confirmed');
     BookingFixture::assertStatus($tenantB, $appointmentB->id, 'pending_payment');
