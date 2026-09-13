@@ -56,11 +56,17 @@ class SendAppointmentReminderJob extends TenantScopedJob
         $appointment = $delivery->appointment;
         $customer = $appointment?->customer;
 
-        if ($appointment === null || $customer === null || $customer->email === null) {
+        // appointment_id/customer_id are both NOT NULL foreign keys
+        // (appointments/notification_deliveries migrations) — this is a
+        // fail-closed guard against a relation genuinely failing to
+        // resolve (e.g. a tenant-context bug), not a real "customer has no
+        // email" case; `customers.email` is itself NOT NULL at the DB
+        // level, so no such case exists to guard against separately.
+        if ($appointment === null || $customer === null) {
             $delivery->status = 'failed';
             $delivery->save();
 
-            Log::warning('Appointment reminder skipped: appointment or customer email missing', [
+            Log::warning('Appointment reminder skipped: appointment or customer relation failed to resolve', [
                 'notification_delivery_id' => $delivery->id,
                 'appointment_id' => $delivery->appointment_id,
             ]);

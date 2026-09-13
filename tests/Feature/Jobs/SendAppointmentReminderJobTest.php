@@ -28,7 +28,7 @@ test('a scheduled reminder is sent and marked sent, addressed to the customer on
         'purpose' => 'reminder_24h',
     ]));
 
-    $customerEmail = TenantContext::run($tenant->id, fn () => $appointment->customer()->firstOrFail()->email);
+    $customerEmail = TenantContext::run($tenant->id, fn () => $appointment->customer->email);
 
     SendAppointmentReminderJob::dispatchSync($tenant->id, $delivery->id);
 
@@ -62,30 +62,6 @@ test('a delivery that is not (or no longer) scheduled is left untouched — safe
         $reloaded = NotificationDelivery::query()->findOrFail($delivery->id);
         expect($reloaded->status)->toBe('sent');
         expect($reloaded->sent_at)->toEqual($delivery->sent_at);
-    });
-});
-
-test('a customer with no email on file is marked failed rather than throwing', function () {
-    Mail::fake();
-
-    $tenant = Tenant::factory()->create();
-    $appointment = BookingFixture::appointmentFor($tenant, ['status' => 'confirmed']);
-
-    TenantContext::run($tenant->id, function () use ($appointment) {
-        $appointment->customer()->first()->update(['email' => null]);
-    });
-
-    $delivery = TenantContext::run($tenant->id, fn () => NotificationDelivery::factory()->create([
-        'tenant_id' => $tenant->id,
-        'appointment_id' => $appointment->id,
-    ]));
-
-    SendAppointmentReminderJob::dispatchSync($tenant->id, $delivery->id);
-
-    Mail::assertNothingSent();
-
-    TenantContext::run($tenant->id, function () use ($delivery) {
-        expect(NotificationDelivery::query()->findOrFail($delivery->id)->status)->toBe('failed');
     });
 });
 

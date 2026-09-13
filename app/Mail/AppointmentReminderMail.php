@@ -39,7 +39,7 @@ class AppointmentReminderMail extends Mailable
             view: 'emails.appointment-reminder',
             with: [
                 'tenantName' => $this->delivery->tenant->name,
-                'serviceName' => $this->delivery->appointment->service?->name ?? 'your appointment',
+                'serviceName' => $this->delivery->appointment->service->name,
                 'startsAt' => $this->delivery->appointment->starts_at->toDayDateTimeString(),
             ],
         );

@@ -74,12 +74,68 @@ class RabbitMqQueue extends QueueBase implements QueueContract
 
     public function size($queue = null): int
     {
+        return $this->pendingSize($queue) + $this->delayedSize($queue);
+    }
+
+    /**
+     * Jobs ready for immediate delivery — the target queue's own message
+     * count. Excludes anything still sitting in `{queue}.delay`.
+     */
+    public function pendingSize($queue = null): int
+    {
         $queue = $this->resolveQueueName($queue);
         $this->ensureQueueDeclared($queue);
 
         [, $messageCount] = $this->channel->queue_declare($queue, passive: true);
 
         return $messageCount;
+    }
+
+    /** Jobs currently held in `{queue}.delay`, not yet dead-lettered back to the real queue (D-0047). */
+    public function delayedSize($queue = null): int
+    {
+        $queue = $this->resolveQueueName($queue);
+        $delayQueue = $this->delayQueueName($queue);
+
+        if (! isset($this->declaredQueues[$delayQueue])) {
+            // Never published a delayed job on this queue in this
+            // connection's lifetime — nothing to passively declare yet,
+            // and declaring it here (durable, no arguments) would collide
+            // with the real, argument-bearing definition the first
+            // publishDelayed() call creates.
+            return 0;
+        }
+
+        [, $messageCount] = $this->channel->queue_declare($delayQueue, passive: true);
+
+        return $messageCount;
+    }
+
+    /**
+     * AMQP 0-9-1's queue.declare-ok carries only ready-message and
+     * consumer counts — nothing server-side distinguishes "delivered to a
+     * consumer, not yet ack'd" the way SQS's in-flight count or Redis's
+     * reserved list do, and this driver's basic_get-based pop() (no
+     * long-lived prefetch) never holds more than one message reserved at a
+     * time regardless. Stated as a real, permanent protocol-level
+     * limitation of this implementation, not silently approximated as 0
+     * without comment.
+     */
+    public function reservedSize($queue = null): int
+    {
+        return 0;
+    }
+
+    /**
+     * Same limitation as reservedSize(): reading a message's age without
+     * consuming it isn't exposed by AMQP 0-9-1's queue.declare — only
+     * RabbitMQ's separate HTTP management API (not used by this driver)
+     * exposes per-message timestamps. Returning null (this interface's own
+     * "unknown" value) is honest; a fabricated timestamp would not be.
+     */
+    public function creationTimeOfOldestPendingJob($queue = null): ?int
+    {
+        return null;
     }
 
     public function push($job, $data = '', $queue = null): mixed
