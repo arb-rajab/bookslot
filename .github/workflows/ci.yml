@@ -116,3 +116,140 @@ jobs:
 
       - name: Real-broker queue tests (RabbitMQ)
         run: composer test:queue-broker
+
+  # D-0051 (docs/project-memory/09-decision-log.md): frontend/ (D-0038) had
+  # real npm dependencies, a real Vitest suite, and a real Playwright E2E
+  # suite added before this job existed — without this job, none of them
+  # would ever actually run anywhere except a developer's own machine,
+  # which defeats the entire point of having them. Mirrors the backend
+  # job's own Postgres/Redis/RabbitMQ provisioning and role-bootstrap
+  # script exactly, rather than duplicating a second, divergent setup, so
+  # the two jobs can never silently drift apart on how the database is
+  # prepared.
+  frontend:
+    name: Frontend (typecheck, unit tests, real-browser E2E)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres_superuser_local_only
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      rabbitmq:
+        image: rabbitmq:4-management-alpine
+        env:
+          RABBITMQ_DEFAULT_USER: bookslot
+          RABBITMQ_DEFAULT_PASS: bookslot_local_only
+        ports:
+          - 5672:5672
+          - 15672:15672
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: pgsql, pdo_pgsql, redis, sockets, bcmath
+          coverage: none
+
+      - name: Authenticate Composer against GitHub API
+        run: composer config -g github-oauth.github.com "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: Get Composer cache directory
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: ${{ runner.os }}-composer-${{ hashFiles('composer.lock') }}
+          restore-keys: ${{ runner.os }}-composer-
+
+      - name: Install PHP dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      # Real dev config (.env.example), not .env.testing — this job proves
+      # the app the way a real browser will actually hit it (real RabbitMQ
+      # queue, real Redis session driver), not the fast gate's in-process
+      # sync/array substitutions.
+      - name: Prepare environment
+        run: |
+          cp .env.example .env
+          php artisan key:generate --force
+
+      - name: Create Postgres roles and databases
+        env:
+          PGPASSWORD: postgres_superuser_local_only
+        run: psql -h 127.0.0.1 -U postgres -f docker/postgres/init/01-roles-and-database.sql
+
+      - name: Run migrations (bookslot_migrator)
+        run: php artisan migrate --database=pgsql_migrator --force
+
+      # The E2E suite's own fixture data (frontend/tests/e2e/booking-flow.spec.ts
+      # books against the seeded `demo-studio` tenant/service/owner login) —
+      # see database/seeders/DatabaseSeeder.php.
+      - name: Seed demo tenant
+        run: php artisan db:seed --force
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install Playwright's Chromium
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Typecheck
+        working-directory: frontend
+        run: npm run typecheck
+
+      - name: Unit/component tests (Vitest)
+        working-directory: frontend
+        run: npm run test:unit
+
+      # playwright.config.ts's own webServer entries start both `php
+      # artisan serve` and `npm run dev` — nothing needs to be running
+      # before this step.
+      - name: E2E tests (Playwright, real Chromium)
+        working-directory: frontend
+        run: npm run test:e2e
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 7
