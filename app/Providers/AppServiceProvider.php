@@ -5,7 +5,9 @@ namespace App\Providers;
 use App\Payments\FakePaymentIntentGateway;
 use App\Payments\PaymentIntentGateway;
 use App\Payments\StripePaymentIntentGateway;
+use App\Queue\RabbitMq\RabbitMqConnector;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\ServiceProvider;
 use Stripe\StripeClient;
 
@@ -48,6 +50,11 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        //
+        // D-0047: registers the 'rabbitmq' queue connection's driver.
+        // Laravel resolves a connector by the connection's own 'driver' key
+        // (config/queue.php), never by the connection name itself, so this
+        // extend() call is what makes QUEUE_CONNECTION=rabbitmq resolvable
+        // at all.
+        Queue::extend('rabbitmq', fn () => new RabbitMqConnector);
     }
 }

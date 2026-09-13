@@ -30,6 +30,30 @@ services:
       timeout: 5s
       retries: 10
 
+  # D-0047 (docs/project-memory/09-decision-log.md): the real broker every
+  # queued job (Stripe webhook processing, hold-window expiry, appointment
+  # reminders) runs on — see config/queue.php's 'rabbitmq' connection.
+  # Management plugin image included for local debugging (queue depth,
+  # dead-letter routing) via http://localhost:15672, not required by the
+  # application itself.
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: bookslot
+      RABBITMQ_DEFAULT_PASS: bookslot_local_only
+    ports:
+      - "${FORWARD_RABBITMQ_PORT:-5672}:5672"
+      - "${FORWARD_RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
+    volumes:
+      - bookslot-rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
 volumes:
   bookslot-postgres-data:
   bookslot-redis-data:
+  bookslot-rabbitmq-data:
