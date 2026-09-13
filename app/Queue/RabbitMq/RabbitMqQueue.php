@@ -4,6 +4,7 @@ namespace App\Queue\RabbitMq;
 
 use Illuminate\Contracts\Queue\Queue as QueueContract;
 use Illuminate\Queue\Queue as QueueBase;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 use PhpAmqpLib\Channel\AMQPChannel;
 use PhpAmqpLib\Connection\AMQPStreamConnection;
@@ -119,7 +120,7 @@ class RabbitMqQueue extends QueueBase implements QueueContract
     }
 
     /**
-     * @param  \Illuminate\Support\Collection<array-key, mixed>|array<array-key, mixed>  $jobs
+     * @param  Collection<array-key, mixed>|array<array-key, mixed>  $jobs
      */
     public function bulk($jobs, $data = '', $queue = null): void
     {
