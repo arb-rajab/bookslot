@@ -81,4 +81,35 @@ return [
 
     'availability_slot_increment_minutes' => (int) env('BOOKING_AVAILABILITY_SLOT_INCREMENT_MINUTES', 15),
 
+    /*
+    |--------------------------------------------------------------------------
+    | Reminder cadence
+    |--------------------------------------------------------------------------
+    |
+    | FR-06 (02-requirements.md), D-0050 (09-decision-log.md): each key is a
+    | notification_deliveries.purpose value (see that table's CHECK
+    | constraint), each value how many minutes before an appointment's
+    | starts_at that reminder becomes due. The ~7 day/~24 hour/~2 hour
+    | cadence itself is 01-scope-and-non-goals.md's own illustrative
+    | default (R-04, unvalidated effectiveness) — unchanged by D-0050,
+    | which only builds the sending mechanism, not a new cadence decision.
+    |
+    | 'reminder_dispatch_window_minutes' is how wide a band around the exact
+    | offset above counts as "due now" when the scheduled command below
+    | runs — reasoned from, and kept equal to, the command's own polling
+    | frequency, so no appointment can fall between two runs and never get a
+    | reminder, while a firstOrCreate on (appointment_id, purpose) keeps a
+    | reminder that's due across more than one run from ever being
+    | double-scheduled.
+    |
+    */
+
+    'reminder_offsets_minutes' => [
+        'reminder_7d' => 7 * 24 * 60,
+        'reminder_24h' => 24 * 60,
+        'reminder_2h' => 2 * 60,
+    ],
+
+    'reminder_dispatch_window_minutes' => (int) env('BOOKING_REMINDER_DISPATCH_WINDOW_MINUTES', 15),
+
 ];

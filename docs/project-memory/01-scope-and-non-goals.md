@@ -1,12 +1,17 @@
 # Scope and Non-Goals
 > Purpose: prevent scope creep by writing down what this will never do.
 > Project: bookslot (PRIVATE track)
-> Last updated: 2026-08-26 (Session 18 — MVP boundary checklist rewritten as
-> a final accounting; see D-0045, `09-decision-log.md`, for why the build
-> phase closes here rather than this list being carried forward as
-> in-progress)
+> Last updated: 2026-09-13 (Session 19 — three items promoted from "Not
+> built" to "Built and proven" (Stripe webhook handling, hold-window
+> expiry, automated reminders) per D-0046 through D-0050
+> (`09-decision-log.md`), under an explicit, bounded reopening of D-0045's
+> checkpoint — see that entry for why building resumed and exactly how
+> narrow this session's scope was kept. This list's Session 18 framing
+> below is otherwise left as written: it is still a closed accounting of a
+> checkpoint, amended in place for what actually changed, not silently
+> re-opened into a forward-looking target list again.)
 
-## MVP boundary — final accounting (Session 18 checkpoint)
+## MVP boundary — final accounting (Session 18 checkpoint, amended Session 19)
 
 Sessions 2 through 17 built against the target boundary below. Per
 **D-0045** (`09-decision-log.md`), this checklist is no longer a forward
@@ -15,7 +20,10 @@ a closed, honest accounting of exactly where each item actually stands as
 of this checkpoint. Three states, no fourth: **built and proven**, **not
 built** (stated plainly — never "almost done" when it was never started),
 or **permanently unverifiable by deliberate project-scope choice** (not a
-gap anyone intends to close within this project's lifecycle).
+gap anyone intends to close within this project's lifecycle). Session 19
+(D-0046) explicitly reopened this checkpoint for a bounded, named scope —
+see that entry — and amended the three items below accordingly; every
+other item's status is exactly as Session 18 left it.
 
 ### Built and proven
 
@@ -64,15 +72,41 @@ test that fails if it regresses — not merely coded and assumed correct.
       no cron/scheduler process actually runs anywhere yet
       (`08-deployment-and-operations.md`); the command is eligible to run,
       not yet wired into a live scheduler.*
+- [x] **Stripe webhook handling (J9)** — Session 19, D-0048:
+      `POST /api/webhooks/stripe`, real signature verification, dedup by
+      Stripe event id, `payment_intent.succeeded`/`payment_intent.payment_failed`
+      handled idempotently (late-arrival and duplicate-delivery cases both
+      tested), via a real message-queue job (`ProcessStripeWebhookJob`) on
+      the new RabbitMQ broker (D-0047). *Caveat: `charge.dispute.created`
+      is recorded but not processed — no per-tenant handling exists for it
+      yet (its payload carries no resolvable tenant_id); D-0036's real-
+      Stripe-network limitation is unchanged — every test here signs its
+      own fixture payload locally, never a live Stripe delivery.*
+- [x] **Hold-window expiry enforcement (FR-05)** — Session 19, D-0049:
+      `ReleaseExpiredPendingBookingJob`, dispatched with a real delay (the
+      new RabbitMQ broker's TTL+dead-letter-exchange mechanism, D-0047) at
+      booking-creation time, releases a still-`pending_payment` slot back
+      to availability; re-checks live status before acting, so a booking
+      confirmed or cancelled by any other path in the meantime is never
+      undone. D-0011's mechanism, finally wired to a real job.
+- [x] **Automated reminders (D-0050)** — Session 19: `reminders:dispatch`
+      (scheduled every 15 minutes) plus `SendAppointmentReminderJob` turn
+      `notification_deliveries`' pre-existing `reminder_7d`/`reminder_24h`/
+      `reminder_2h` schema into real, tested, exactly-once sends, guarded by
+      a real unique constraint (not just an assumed-safe check-then-create).
+      *Caveat, the same accepted-limitation shape as D-0036's for Stripe:
+      `MAIL_MAILER=log` — no real email/SMS provider has ever been obtained
+      for this project, so every reminder is written to a log line today,
+      not a real inbox. R-04 (cadence effectiveness) and R-05
+      (deliverability) both remain exactly as open as before — this item
+      answers neither; it only makes them answerable by a future real
+      pilot.*
 
 ### Not built — stated plainly, never started
 
 No partial credit is claimed for any of these. None has so much as a
 migration, a route, or a stub controller behind it.
 
-- [ ] **Automated reminders (email + SMS)** — R-05 and the reminder-cadence
-      value proposition (R-04) remain exactly as unbuilt and as unvalidated
-      as Session 0/1 left them. Zero code exists for this.
 - [ ] **Automatic balance charging** (the off-session charge half of J5) —
       the *mandate evidence* that would back such a charge is built and
       tested (D-0010, `payment_mandates`), but the charge itself — actually
@@ -85,11 +119,6 @@ migration, a route, or a stub controller behind it.
       against a single seeded demo tenant with no onboarding flow of its
       own; there is no path today for a second, real business to connect a
       Stripe account to this product at all.
-- [ ] **Hold-window expiry enforcement** — D-0011 decided the *mechanism*
-      (a configurable 15-minute hold), but nothing actually releases an
-      expired `pending_payment` slot back to availability. Named again here
-      because it sat in "next recommended session" for multiple sessions
-      running without being picked up.
 - [ ] **No-show count on the owner dashboard** (part of FR-15) — the
       appointment list and deposit status are real; the summary count is
       not, in either the API response or the frontend.

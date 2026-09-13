@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Jobs\ReleaseExpiredPendingBookingJob;
 use App\Mandates\MandateRenderer;
 use App\Models\Appointment;
 use App\Models\Customer;
@@ -42,6 +43,12 @@ use Throwable;
  *      the hold immediately (appointment -> cancelled) rather than
  *      leaving a zombie hold for the expiry job to eventually clear, and
  *      the request fails with a distinct, machine-readable error.
+ *   5. On success — D-0049 (09-decision-log.md), FR-05: dispatches exactly
+ *      one ReleaseExpiredPendingBookingJob, delayed by
+ *      config('booking.hold_window_minutes'), as the real backstop for the
+ *      hold window this endpoint's own response already advertises via
+ *      payment_confirmation_token's expiry. A customer who never completes
+ *      payment has their slot released by this job, not left held forever.
  *
  * Deliberately NOT behind the `tenant.context` middleware (see
  * routes/api.php) — that middleware wraps the whole request in one
@@ -168,6 +175,9 @@ class BookingController extends Controller
                 'stripe_payment_method_id' => null,
             ]);
         });
+
+        ReleaseExpiredPendingBookingJob::dispatch($tenantId, $appointment->id)
+            ->delay(now()->addMinutes(config('booking.hold_window_minutes')));
 
         $holdExpiresAt = $appointment->created_at
             ->addMinutes(config('booking.hold_window_minutes'))

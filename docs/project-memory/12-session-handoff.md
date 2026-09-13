@@ -8,6 +8,18 @@
 > follow the `D-####`/`R-##` references for the complete reasoning,
 > rejected alternatives, and execution evidence. Nothing below is invented
 > for this summary — it is a compression of what those files already say.
+>
+> **Read the Session 19 amendment at the end of this file before treating
+> anything below as current.** This block is left exactly as Session 18
+> wrote it (an honest historical record of that checkpoint), per this
+> file's own established convention (see the Session 4/5/6 amendments
+> below, which do the same). Session 19 explicitly reopened this checkpoint
+> under D-0046 for a bounded, named scope (a real message queue, Stripe
+> webhook handling, hold-window expiry, automated reminders) — it did not
+> resolve R-01 or reverse D-0045's reasoning. The "What's real and proven"
+> and "What was never started" lists immediately below are Session 18's own
+> accounting and are now stale in three specific, named places; the Session
+> 19 amendment states exactly which.
 
 **Where this stands, in one paragraph.** `bookslot` is a private-track
 booking-and-deposits product for small appointment-based service
@@ -1420,3 +1432,105 @@ bullet above. A real candidate pilot studio becoming available should take
 priority over anything else. Absent that, the next session must open by
 reading this checkpoint and D-0045, and state explicitly which of the three
 named paths it's taking before writing any application code.
+
+## Amendment (Session 19, 2026-09-13) — D-0045 explicitly reopened (choice b): real message queue, Stripe webhooks, hold-window expiry, and reminders built
+
+**Read `09-decision-log.md`'s D-0046 first** — it is this session's own
+required explicit statement under the Standing Rule immediately above,
+made in full there rather than summarized first here. In short: this
+session was opened with a specific, external work order (build the
+remaining async/integration surface of the booking API), not a request to
+evaluate whether to keep building — that is choice **(b)**, stated for the
+record, not a silent resumption of pre-D-0045 momentum. R-01 (no real
+pilot) is untouched, exactly as open as Session 18 left it.
+
+**Scope, deliberately bounded — see D-0046 for the full reasoning:** this
+session did NOT resume `01`'s general "not built" list. It built exactly
+four things, each with its own decision entry:
+
+- **D-0047 — a real RabbitMQ broker** as this project's queue transport
+  (`App\Queue\RabbitMq\RabbitMqConnector`/`RabbitMqQueue`/`RabbitMqJob`,
+  direct `php-amqplib` integration, not a third-party Laravel-RabbitMQ
+  package), registered via `Queue::extend()`, with a from-scratch
+  TTL+dead-letter-exchange delayed-delivery mechanism and its own
+  `x-bookslot-attempt` retry-tracking header (deliberately not RabbitMQ's
+  conflating `x-death` count). `docker-compose.yml` gained a `rabbitmq`
+  service; `.github/workflows/ci.yml` (new — no CI workflow existed at all
+  before this session) runs one against a real broker in CI too. A new
+  `queue-broker` Pest group / `composer test:queue-broker` proves publish,
+  real TTL-based delay, and real retry-via-requeue against an actual
+  broker, each via a genuinely separate `queue:work --once` OS process
+  (`RabbitMqQueueIntegrationTest`) — the same "prove it against real
+  separate-process execution" standard `BookingConcurrencyTest` (D-0030)
+  already set for this codebase.
+- **D-0048 — Stripe webhook handling built for real (J9)**:
+  `POST /api/webhooks/stripe`, real signature verification (against
+  fixture payloads this session signs itself — D-0036's real-Stripe-network
+  limitation is unchanged), dedup via a new `App\Models\StripeWebhookEvent`
+  wrapping the previously-model-less `stripe_webhook_events` table, and a
+  queued `ProcessStripeWebhookJob` handling `payment_intent.succeeded`/
+  `payment_intent.payment_failed` idempotently. Named gap, not silently
+  absorbed: `charge.dispute.created` is recorded but not processed — its
+  payload carries no resolvable tenant_id (Disputes don't inherit the
+  originating charge's metadata the way PaymentIntents/Charges do).
+- **D-0049 — hold-window expiry (FR-05) finally enforced**:
+  `ReleaseExpiredPendingBookingJob`, dispatched by `BookingController`
+  itself with a real delay via D-0047's mechanism, releases an abandoned
+  `pending_payment` slot — re-checking live status first, so it can never
+  undo a real booking even if it runs late.
+- **D-0050 — automated reminders (FR-06) built**: `reminders:dispatch`
+  (scheduled every 15 minutes) plus `SendAppointmentReminderJob` turn the
+  pre-existing (and previously untouched) `notification_deliveries` schema
+  into real, exactly-once-guaranteed (a real unique constraint, not an
+  assumed-safe race) sends via a real `Mailable`. Same accepted-limitation
+  shape as D-0036: `MAIL_MAILER=log`, no real provider ever obtained — every
+  send today is a log line, not a real inbox. R-04/R-05
+  (`10-risk-register.md`) both stay explicitly open; this entry made R-04
+  measurable by a future real pilot, not validated by this session.
+
+**A scope correction found by reading the spec before building, not
+assumed:** the work order that opened this session described one of the
+three queue-shaped jobs as "no-show detection." `02-requirements.md`'s J4
+already rules explicitly: *"MVP: no automatic no-show detection — an
+explicit owner action."* Building that would have silently contradicted a
+standing, confirmed product ruling. Hold-window expiry (FR-05, D-0049) was
+built instead — a real, previously-named, genuinely queue-shaped gap that
+does not touch J4 at all. Recorded here, and in D-0046, so this substitution
+reads as a deliberate correction, not an unexplained scope change.
+
+**Validation performed:** `composer ci:check` (lint, static analysis, fast
+Pest suite), `composer test:tenant-isolation`, and `composer
+test:queue-broker` (against the real RabbitMQ service this session's own CI
+workflow provisions) — see the PR this session opened for the actual CI run
+this claim is backed by; this file does not restate a pass/fail this
+session cannot itself observe after the fact.
+
+**Files touched this session:** `09-decision-log.md` (D-0046–D-0050),
+`01-scope-and-non-goals.md` (MVP boundary checklist amended — see its own
+Session 19 header note), `10-risk-register.md` (R-04/R-05 rows), this file.
+Application code: `app/Queue/RabbitMq/*` (new), `app/Jobs/
+ReleaseExpiredPendingBookingJob.php`/`ProcessStripeWebhookJob.php`/
+`SendAppointmentReminderJob.php` (new), `app/Http/Controllers/Api/
+StripeWebhookController.php` (new), `app/Models/StripeWebhookEvent.php`
+(new), `app/Mail/AppointmentReminderMail.php` (new), `app/Console/Commands/
+DispatchAppointmentRemindersCommand.php` (new), `config/queue.php`/
+`config/booking.php`/`config/services.php` (amended), `routes/api.php`/
+`routes/console.php` (amended), `BookingController.php` (amended to
+dispatch the new expiry job), one new migration (a unique index on
+`notification_deliveries`), `docker-compose.yml` (new `rabbitmq` service),
+`.github/workflows/ci.yml` and `.github/dependabot.yml` (new — this
+project had no CI workflow and no Dependabot configuration at all before
+this session). **Not touched, deliberately, per D-0046's stated scope
+discipline:** Stripe Connect onboarding, automatic off-session balance
+charging, the post-appointment rebooking prompt, any frontend code.
+
+**Next recommended session:** unchanged in substance from Session 18's own
+standing instruction — R-01 (no real pilot) remains the standing top risk,
+untouched by this session's work, and the Standing Rule above still applies
+in full to whatever session picks this up next. If building continues
+absent a pilot, the natural next bounded pieces (each independently
+justifiable the same way D-0049/D-0050 were, not a return to unexamined
+"keep building") are: the `charge.dispute.created` tenant-resolution gap
+D-0048 named, and the no-show count on the owner dashboard (FR-15,
+`01-scope-and-non-goals.md`'s "Not built" list) — both small, named, and
+low-risk individually.

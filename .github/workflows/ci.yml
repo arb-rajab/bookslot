@@ -1,0 +1,118 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    name: Backend (lint, static analysis, fast + tenant-isolation tests)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres_superuser_local_only
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      # D-0047 (docs/project-memory/09-decision-log.md): the real broker
+      # composer test:queue-broker needs — see App\Queue\RabbitMq. Started
+      # for every backend run (not a separate job) so the fast gate and the
+      # broker suite share one checkout/install/migrate, matching this
+      # project's existing single-job convention.
+      rabbitmq:
+        image: rabbitmq:4-management-alpine
+        env:
+          RABBITMQ_DEFAULT_USER: bookslot
+          RABBITMQ_DEFAULT_PASS: bookslot_local_only
+        ports:
+          - 5672:5672
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: pgsql, pdo_pgsql, redis, sockets, bcmath
+          coverage: none
+
+      # Anonymous Composer/GitHub API requests hit GitHub's low unauthenticated
+      # rate limit almost immediately across ~130 dependencies — the standard,
+      # documented fix (not a credential leak: GITHUB_TOKEN is the runner's
+      # own short-lived, repo-scoped token GitHub Actions injects for exactly
+      # this kind of use).
+      - name: Authenticate Composer against GitHub API
+        run: composer config -g github-oauth.github.com "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: Get Composer cache directory
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: ${{ runner.os }}-composer-${{ hashFiles('composer.lock') }}
+          restore-keys: ${{ runner.os }}-composer-
+
+      - name: Install PHP dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Prepare environment
+        run: |
+          cp .env.testing .env
+          php artisan key:generate --force
+
+      # D-0009/D-0020 (09-decision-log.md): the two-role setup (bookslot_app,
+      # RLS-subject; bookslot_migrator, BYPASSRLS, owns the tables) — the
+      # exact same script docker-compose.yml's postgres service runs on first
+      # boot, reused here rather than duplicated so CI and local dev can
+      # never silently drift apart on how these roles are defined.
+      - name: Create Postgres roles and databases
+        env:
+          PGPASSWORD: postgres_superuser_local_only
+        run: psql -h 127.0.0.1 -U postgres -f docker/postgres/init/01-roles-and-database.sql
+
+      - name: Run migrations (bookslot_migrator)
+        run: php artisan migrate --database=pgsql_migrator --force
+
+      - name: Lint (Pint)
+        run: composer lint
+
+      - name: Static analysis (PHPStan/Larastan)
+        run: composer analyse
+
+      - name: Fast test gate
+        run: composer test:fast
+
+      - name: Tenant-isolation suite
+        run: composer test:tenant-isolation
+
+      - name: Real-broker queue tests (RabbitMQ)
+        run: composer test:queue-broker

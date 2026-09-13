@@ -21,3 +21,11 @@ Artisan::command('inspire', function () {
 // anywhere yet), named as a real, open deployment-story gap rather than
 // assumed solved by registering the command here.
 Schedule::command('mandates:reconcile-backfill')->hourly();
+
+// D-0050 (09-decision-log.md), FR-06: every 15 minutes to match
+// config('booking.reminder_dispatch_window_minutes')'s own default — see
+// that config entry's docblock for why the two must stay equal. Same
+// "requires a real `php artisan schedule:run` cron entry" deployment gap
+// mandates:reconcile-backfill above already carries (08-deployment-and-
+// operations.md; no scheduler runs anywhere yet).
+Schedule::command('reminders:dispatch')->everyFifteenMinutes();

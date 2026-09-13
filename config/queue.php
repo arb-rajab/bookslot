@@ -73,6 +73,26 @@ return [
             'after_commit' => false,
         ],
 
+        // D-0047 (docs/project-memory/09-decision-log.md): the real message
+        // broker Stripe webhook processing, hold-window expiry, and
+        // appointment reminder dispatch all run on — see
+        // App\Queue\RabbitMq\RabbitMqConnector for the driver this
+        // connection resolves to. Deliberately a distinct queue name per
+        // job "kind" is NOT used here — App\Jobs\TenantScopedJob/PlatformJob
+        // subclasses all share this one 'bookslot' queue at MVP scale; per-
+        // job-class queues are a scaling change for a future session, not a
+        // correctness requirement today.
+        'rabbitmq' => [
+            'driver' => 'rabbitmq',
+            'host' => env('RABBITMQ_HOST', '127.0.0.1'),
+            'port' => (int) env('RABBITMQ_PORT', 5672),
+            'user' => env('RABBITMQ_USER', 'bookslot'),
+            'password' => env('RABBITMQ_PASSWORD', 'bookslot_local_only'),
+            'vhost' => env('RABBITMQ_VHOST', '/'),
+            'queue' => env('RABBITMQ_QUEUE', 'bookslot'),
+            'retry_after' => (int) env('RABBITMQ_RETRY_AFTER', 90),
+        ],
+
         'deferred' => [
             'driver' => 'deferred',
         ],

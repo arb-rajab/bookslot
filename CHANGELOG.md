@@ -7,7 +7,41 @@ the `v0.1.0-mvp-checkpoint` entry below for why this project tags at all).
 
 ## [Unreleased]
 
-Nothing pending beyond the checkpoint below as of Session 18.
+### Added — Session 19, 2026-09-13
+D-0045's build-phase pause (below) was explicitly reopened for a bounded,
+named scope per D-0046 (`docs/project-memory/09-decision-log.md`) — not a
+general resumption of MVP feature work. See
+`docs/project-memory/12-session-handoff.md`'s Session 19 amendment for the
+full account.
+
+- A real RabbitMQ message broker as this project's queue transport
+  (`App\Queue\RabbitMq`, direct `php-amqplib` integration — not a
+  third-party Laravel-RabbitMQ package), with a real TTL/dead-letter-
+  exchange delayed-delivery mechanism and its own retry/attempt tracking
+  (D-0047). `docker-compose.yml` gained a `rabbitmq` service.
+- Stripe webhook handling, built for real (D-0048):
+  `POST /api/webhooks/stripe`, real signature verification, event dedup,
+  and idempotent `payment_intent.succeeded`/`payment_intent.payment_failed`
+  processing via a queued job. (`charge.dispute.created` is recorded but
+  not yet processed — see D-0048's own named gap.)
+- Hold-window expiry enforcement (FR-05), finally wired to a real delayed
+  job — an abandoned `pending_payment` booking's slot is now actually
+  released back to availability (D-0049).
+- Automated appointment reminders (FR-06) — real, exactly-once, tested
+  sends via `notification_deliveries`' pre-existing schema (D-0050).
+  `MAIL_MAILER=log` remains the only mailer ever run — no real email/SMS
+  provider has been obtained, the same accepted-limitation shape D-0036
+  already established for Stripe.
+- A GitHub Actions CI workflow (`.github/workflows/ci.yml`) and Dependabot
+  configuration (`.github/dependabot.yml`) — neither existed before this
+  session.
+
+### Known limitations added this session
+- `charge.dispute.created` webhooks are recorded but not processed — no
+  per-tenant handling exists yet (see D-0048).
+- Reminders are sent through the `log` mailer only — no real email/SMS
+  provider has ever been obtained for this project (same shape as the
+  Stripe limitation below).
 
 ## [v0.1.0-mvp-checkpoint] - 2026-08-26
 

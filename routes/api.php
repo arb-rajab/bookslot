@@ -11,6 +11,7 @@ use App\Http\Controllers\Api\Owner\ServiceController as OwnerServiceController;
 use App\Http\Controllers\Api\PaymentConfirmationController;
 use App\Http\Controllers\Api\ServiceController;
 use App\Http\Controllers\Api\Staff\AppointmentController as StaffAppointmentController;
+use App\Http\Controllers\Api\StripeWebhookController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -57,6 +58,13 @@ Route::middleware(['resolve.tenant.token:manage_booking', 'tenant.context'])
 // short, explicit TenantContext::run() calls around the Stripe call.
 Route::middleware(['resolve.tenant.token:confirm_payment'])
     ->post('bookings/{token}/confirm-payment', [PaymentConfirmationController::class, 'store']);
+
+// D-0048: no tenant-resolution middleware at all — see
+// StripeWebhookController's own docblock for why (tenant context is
+// recovered from the verified event payload inside the dispatched job, not
+// from any route mechanism). Never behind `tenant.context`/`auth.tenant`:
+// this request carries no session, no slug, no signed token.
+Route::post('webhooks/stripe', [StripeWebhookController::class, 'store']);
 
 Route::post('admin/login', [AuthController::class, 'adminLogin']);
 
