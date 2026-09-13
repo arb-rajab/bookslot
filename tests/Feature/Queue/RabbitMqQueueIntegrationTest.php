@@ -1,5 +1,6 @@
 <?php
 
+use Illuminate\Contracts\Process\ProcessResult;
 use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Str;
@@ -25,7 +26,7 @@ use Tests\Support\Queue\WritesMarkerJob;
  * dead-letter left behind by a failed run of this suite can never leak
  * into the next run or another test.
  */
-function runQueueWorkerOnce(string $queue, int $timeoutSeconds = 15): \Illuminate\Contracts\Process\ProcessResult
+function runQueueWorkerOnce(string $queue, int $timeoutSeconds = 15): ProcessResult
 {
     return Process::path(base_path())
         ->env(['APP_ENV' => 'testing'])

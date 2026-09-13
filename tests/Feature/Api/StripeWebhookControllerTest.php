@@ -5,6 +5,7 @@ use App\Models\PaymentMandate;
 use App\Models\StripeWebhookEvent;
 use App\Models\Tenant;
 use App\Tenancy\TenantContext;
+use Illuminate\Testing\TestResponse;
 use Tests\Support\BookingFixture;
 use Tests\Support\StripeWebhookSignature;
 
@@ -38,7 +39,7 @@ function paymentIntentEventPayload(string $type, string $paymentIntentId, string
 // double-encode our already-JSON payload and break the signature (it must
 // be computed over the exact bytes Stripe would send) — call the
 // underlying test-client method directly with a raw body instead.
-function postRawSignedWebhook(string $payload): \Illuminate\Testing\TestResponse
+function postRawSignedWebhook(string $payload): TestResponse
 {
     $secret = config('services.stripe.webhook_secret');
     $header = StripeWebhookSignature::header($payload, $secret);

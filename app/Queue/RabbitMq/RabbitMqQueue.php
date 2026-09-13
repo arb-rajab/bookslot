@@ -9,6 +9,7 @@ use PhpAmqpLib\Channel\AMQPChannel;
 use PhpAmqpLib\Connection\AMQPStreamConnection;
 use PhpAmqpLib\Message\AMQPMessage;
 use PhpAmqpLib\Wire\AMQPTable;
+use Throwable;
 
 /**
  * D-0047 (docs/project-memory/09-decision-log.md): a real AMQP broker
@@ -255,7 +256,7 @@ class RabbitMqQueue extends QueueBase implements QueueContract
         try {
             $this->channel->close();
             $this->connection->close();
-        } catch (\Throwable) {
+        } catch (Throwable) {
             // Best-effort cleanup only — a broker connection already lost
             // (worker shutting down, process killed) must never throw from
             // a destructor.
