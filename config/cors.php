@@ -30,7 +30,20 @@ return [
 
     'allowed_origins_patterns' => [],
 
-    'allowed_headers' => ['*'],
+    // D-0051 (docs/project-memory/09-decision-log.md): a real browser
+    // enforces the Fetch spec's credentialed-CORS rule that '*' is NOT a
+    // wildcard for Allow-Headers once supports_credentials is true (unlike
+    // allowed_methods, where Laravel's CORS middleware already always
+    // echoes back the requested method regardless of this setting) — it's
+    // matched literally, so a real cross-origin request carrying
+    // `X-XSRF-TOKEN` (this app's own CSRF header, useApi.ts) was silently
+    // rejected at the preflight, with no error Laravel itself ever logs
+    // (the browser blocks the response from ever reaching application
+    // code). Found only by this session's first real Playwright run
+    // against an actual browser — every non-browser HTTP test in this
+    // codebase, including the Sanctum/CSRF Feature tests, sends the header
+    // directly and so never exercises real preflight enforcement at all.
+    'allowed_headers' => ['Content-Type', 'X-Requested-With', 'X-XSRF-TOKEN', 'Accept'],
 
     'exposed_headers' => [],
 

@@ -7,7 +7,12 @@ use App\Http\Controllers\Api\BookingController;
 use App\Http\Controllers\Api\ManageBookingController;
 use App\Http\Controllers\Api\MandateController;
 use App\Http\Controllers\Api\Owner\AppointmentController as OwnerAppointmentController;
+use App\Http\Controllers\Api\Owner\AvailabilityExceptionController as OwnerAvailabilityExceptionController;
+use App\Http\Controllers\Api\Owner\NotificationController as OwnerNotificationController;
+use App\Http\Controllers\Api\Owner\QueueHealthController as OwnerQueueHealthController;
 use App\Http\Controllers\Api\Owner\ServiceController as OwnerServiceController;
+use App\Http\Controllers\Api\Owner\StaffController as OwnerStaffController;
+use App\Http\Controllers\Api\Owner\WorkingHourController as OwnerWorkingHourController;
 use App\Http\Controllers\Api\PaymentConfirmationController;
 use App\Http\Controllers\Api\ServiceController;
 use App\Http\Controllers\Api\Staff\AppointmentController as StaffAppointmentController;
@@ -73,9 +78,29 @@ Route::middleware(['auth'])->post('logout', [AuthController::class, 'logout']);
 Route::prefix('owner')
     ->middleware(['auth.tenant', 'role:owner'])
     ->group(function () {
+        Route::get('services', [OwnerServiceController::class, 'index']);
         Route::post('services', [OwnerServiceController::class, 'store']);
+        Route::patch('services/{service}', [OwnerServiceController::class, 'update']);
+
+        Route::get('staff', [OwnerStaffController::class, 'index']);
+        Route::post('staff', [OwnerStaffController::class, 'store']);
+        Route::patch('staff/{staff}', [OwnerStaffController::class, 'update']);
+
+        Route::get('staff/{staff}/working-hours', [OwnerWorkingHourController::class, 'index']);
+        Route::put('staff/{staff}/working-hours', [OwnerWorkingHourController::class, 'replace']);
+
+        Route::get('staff/{staff}/availability-exceptions', [OwnerAvailabilityExceptionController::class, 'index']);
+        Route::post('staff/{staff}/availability-exceptions', [OwnerAvailabilityExceptionController::class, 'store']);
+        Route::delete('staff/{staff}/availability-exceptions/{exception}', [OwnerAvailabilityExceptionController::class, 'destroy']);
+
         Route::get('appointments', [OwnerAppointmentController::class, 'index']);
+        Route::get('appointments/{id}', [OwnerAppointmentController::class, 'show']);
         Route::patch('appointments/{id}/status', [OwnerAppointmentController::class, 'updateStatus']);
+        Route::post('appointments/{id}/cancel', [OwnerAppointmentController::class, 'cancel']);
+
+        Route::get('notifications', [OwnerNotificationController::class, 'index']);
+
+        Route::get('queue-health', [OwnerQueueHealthController::class, 'show']);
     });
 
 Route::prefix('staff')

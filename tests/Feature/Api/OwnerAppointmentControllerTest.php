@@ -2,6 +2,7 @@
 
 use App\Models\Appointment;
 use App\Models\BookingEvent;
+use App\Models\NotificationDelivery;
 use App\Models\Payment;
 use App\Models\Refund;
 use App\Models\Staff;
@@ -13,6 +14,7 @@ use Tests\Support\BookingFixture;
 
 use function Pest\Laravel\getJson;
 use function Pest\Laravel\patchJson;
+use function Pest\Laravel\postJson;
 
 /**
  * GET/PATCH /api/owner/appointments... (05-api-contracts.md endpoint 4,
@@ -209,4 +211,141 @@ test('a staff member cannot call the owner mark-attendance endpoint', function (
 
 test('an unauthenticated request to list owner appointments is rejected', function () {
     getJson('/api/owner/appointments')->assertStatus(401);
+});
+
+test('an owner sees full detail on one appointment: payments, reminders, and the audit trail', function () {
+    [$tenant] = ownerAndTenant();
+    $appointment = BookingFixture::appointmentFor($tenant, ['status' => 'confirmed']);
+    BookingFixture::depositPaymentFor($tenant, $appointment, ['status' => 'succeeded']);
+    TenantContext::run($tenant->id, fn () => NotificationDelivery::factory()->create([
+        'tenant_id' => $tenant->id,
+        'appointment_id' => $appointment->id,
+        'purpose' => 'reminder_24h',
+        'status' => 'sent',
+    ]));
+
+    $xsrf = loginAsOwner($tenant);
+
+    $response = getJson("/api/owner/appointments/{$appointment->id}", [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+
+    $response->assertOk();
+    $response->assertJson(['id' => $appointment->id, 'deposit_status' => 'succeeded']);
+    expect($response->json('customer_email'))->not->toBeNull();
+    expect(collect($response->json('payments')))->toHaveCount(1);
+    expect(collect($response->json('reminders')))->toHaveCount(1);
+    expect($response->json('reminders.0.status'))->toBe('sent');
+});
+
+test('an owner cannot view another tenant\'s appointment detail, gets a plain 404', function () {
+    [$tenant] = ownerAndTenant();
+    $otherTenant = Tenant::factory()->create();
+    $foreignAppointment = BookingFixture::appointmentFor($otherTenant);
+
+    $xsrf = loginAsOwner($tenant);
+
+    $response = getJson("/api/owner/appointments/{$foreignAppointment->id}", [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+
+    $response->assertStatus(404);
+});
+
+test('an owner cancels a confirmed appointment, freeing the slot with no Stripe/refund row created', function () {
+    [$tenant] = ownerAndTenant();
+    $appointment = BookingFixture::appointmentFor($tenant, ['status' => 'confirmed']);
+    BookingFixture::depositPaymentFor($tenant, $appointment, ['status' => 'succeeded']);
+
+    $xsrf = loginAsOwner($tenant);
+
+    $response = postJson("/api/owner/appointments/{$appointment->id}/cancel", ['reason' => 'Customer called to cancel'], [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+
+    $response->assertOk();
+    $response->assertJson(['status' => 'cancelled']);
+
+    TenantContext::run($tenant->id, function () use ($appointment) {
+        $fresh = Appointment::find($appointment->id);
+        expect($fresh->status)->toBe('cancelled');
+        expect($fresh->cancelled_by)->toBe('studio');
+        expect($fresh->cancelled_reason)->toBe('Customer called to cancel');
+        expect($fresh->cancelled_at)->not->toBeNull();
+
+        // D-0051: bookkeeping only — cancellation never touches Stripe or
+        // creates a refunds row, same discipline as no_show forfeiture.
+        expect(Refund::query()->count())->toBe(0);
+
+        $event = BookingEvent::query()->where('appointment_id', $appointment->id)->where('to_status', 'cancelled')->first();
+        expect($event)->not->toBeNull();
+        expect($event->actor_type)->toBe('owner');
+        expect($event->from_status)->toBe('confirmed');
+    });
+});
+
+test('cancelling an already-completed appointment is rejected — nothing left to cancel', function () {
+    [$tenant] = ownerAndTenant();
+    $appointment = BookingFixture::appointmentFor($tenant, ['status' => 'completed']);
+
+    $xsrf = loginAsOwner($tenant);
+
+    $response = postJson("/api/owner/appointments/{$appointment->id}/cancel", [], [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+
+    $response->assertStatus(409);
+    $response->assertJson(['error' => 'INVALID_STATUS_TRANSITION']);
+});
+
+test('cancelling an already-cancelled appointment is rejected as idempotent-unsafe, not silently re-cancelled', function () {
+    [$tenant] = ownerAndTenant();
+    $appointment = BookingFixture::appointmentFor($tenant, [
+        'status' => 'cancelled', 'cancelled_by' => 'system', 'cancelled_reason' => 'hold_window_expired', 'cancelled_at' => now(),
+    ]);
+
+    $xsrf = loginAsOwner($tenant);
+
+    $response = postJson("/api/owner/appointments/{$appointment->id}/cancel", [], [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+
+    $response->assertStatus(409);
+});
+
+test('an owner cannot cancel another tenant\'s appointment, gets a plain 404', function () {
+    [$tenant] = ownerAndTenant();
+    $otherTenant = Tenant::factory()->create();
+    $foreignAppointment = BookingFixture::appointmentFor($otherTenant, ['status' => 'confirmed']);
+
+    $xsrf = loginAsOwner($tenant);
+
+    $response = postJson("/api/owner/appointments/{$foreignAppointment->id}/cancel", [], [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+
+    $response->assertStatus(404);
+});
+
+test('a cancelled appointment\'s slot can be rebooked — the exclusion constraint\'s partial WHERE excludes cancelled', function () {
+    [$tenant] = ownerAndTenant();
+    $appointment = BookingFixture::appointmentFor($tenant, ['status' => 'confirmed']);
+
+    $xsrf = loginAsOwner($tenant);
+    postJson("/api/owner/appointments/{$appointment->id}/cancel", [], [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ])->assertOk();
+
+    TenantContext::run($tenant->id, function () use ($appointment) {
+        $rebooked = Appointment::factory()->create([
+            'tenant_id' => $appointment->tenant_id,
+            'staff_id' => $appointment->staff_id,
+            'service_id' => $appointment->service_id,
+            'customer_id' => $appointment->customer_id,
+            'appointment_range' => $appointment->appointment_range,
+            'status' => 'confirmed',
+        ]);
+
+        expect($rebooked->id)->not->toBe($appointment->id);
+    });
 });

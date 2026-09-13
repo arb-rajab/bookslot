@@ -7,7 +7,10 @@
     "dev": "nuxt dev",
     "generate": "nuxt generate",
     "preview": "nuxt preview",
-    "postinstall": "nuxt prepare"
+    "postinstall": "nuxt prepare",
+    "test:unit": "vitest run",
+    "test:e2e": "playwright test",
+    "typecheck": "vue-tsc --noEmit"
   },
   "dependencies": {
     "nuxt": "^4.5.2",
@@ -16,8 +19,13 @@
     "vue-router": "^5.2.0"
   },
   "devDependencies": {
+    "@nuxt/test-utils": "^4.3.2",
+    "@playwright/test": "^1.63.0",
     "@types/node": "^26.3.0",
+    "@vue/test-utils": "^2.5.0",
+    "happy-dom": "^20.14.5",
     "typescript": "^5.9.3",
+    "vitest": "^5.0.0",
     "vue-tsc": "^3.3.11"
   }
 }

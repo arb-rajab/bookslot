@@ -5,13 +5,18 @@ Laravel API + Nuxt frontend, in this same repository — see that file's
 Session 16 amendment for the monorepo-vs-separate-repo reasoning). Calls
 the real Laravel API in `../`, never a mock.
 
-Currently two real pages: the public booking flow at `/tenants/{slug}`
-(services -> slot picker -> booking form with mandate consent -> deposit
-payment confirmation), and the owner dashboard at `/owner` (log in with a
-studio slug + owner credentials -> list of the tenant's appointments ->
-mark an appointment attended/no-show). See
-`docs/project-memory/12-session-handoff.md`'s Session 16/17 amendments for
-exactly what's built vs. still missing.
+The public booking flow lives at `/tenants/{slug}` (services -> slot
+picker -> booking form with mandate consent -> deposit payment
+confirmation). The owner/admin surface lives under `/owner` (log in with a
+studio slug + owner credentials): `/owner/appointments` (list + detail +
+cancellation, the default landing page), `/owner/services`,
+`/owner/availability` (staff, weekly working hours, one-off exceptions),
+`/owner/notifications` (reminder delivery log), and `/owner/queue-health`.
+See `docs/project-memory/12-session-handoff.md`'s Session 16/17/20
+amendments and `docs/project-memory/09-decision-log.md`'s D-0051 for
+exactly what's built vs. still missing (and for the two real
+browser-only bugs Session 20's first Playwright run found and fixed —
+worth reading before assuming a page "just works" because it typechecks).
 
 ## Setup
 
@@ -42,5 +47,21 @@ flow, or `http://localhost:3000/owner` for the owner dashboard.
 
 ```bash
 npm run build
-npx nuxi typecheck
+npm run typecheck
 ```
+
+## Tests
+
+```bash
+npm run test:unit   # Vitest — composables and components, real Nuxt auto-import context, no mocked network layer
+npm run test:e2e    # Playwright — real Chromium against the real Laravel API; starts both dev servers itself
+```
+
+`test:e2e` needs a real Postgres/Redis/RabbitMQ stack migrated and seeded
+(`php artisan migrate:fresh --seed` from the repository root) before it
+runs — it exercises the real `demo-studio` seed data, not fixtures of its
+own. Use `http://localhost:*`, never `http://127.0.0.1:*`, for anything
+touching this app's cookies (see `playwright.config.ts`'s own comment) —
+Sanctum's SPA cookie pattern depends on the frontend and API sharing a
+hostname, and `localhost`/`127.0.0.1` are different hostnames even though
+they're the same machine.

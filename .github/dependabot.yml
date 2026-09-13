@@ -9,3 +9,12 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+
+  # D-0051: frontend/ (D-0038) has carried real npm dependencies since
+  # Session 16, but this file only ever tracked composer/github-actions —
+  # found while auditing Dependabot coverage for this session's own PR,
+  # not something this session's dependency additions caused.
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
