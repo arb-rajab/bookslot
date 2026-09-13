@@ -1534,3 +1534,116 @@ justifiable the same way D-0049/D-0050 were, not a return to unexamined
 D-0048 named, and the no-show count on the owner dashboard (FR-15,
 `01-scope-and-non-goals.md`'s "Not built" list) — both small, named, and
 low-risk individually.
+
+## Amendment (Session 20, 2026-09-13) — the staff/admin frontend built; D-0045/D-0046's choice (b) reopened again for this bounded scope
+
+**Read this session's own work order carefully before trusting it — it was
+wrong about the starting state.** It described "no frontend exists yet."
+That was false: `frontend/` (D-0038, Session 16) already had a real Nuxt
+app — a public booking page and an owner dashboard (Session 17: login,
+appointment list, mark-attended/no-show). This is the same category of
+staleness a prior audit already found in this repository's own README
+("Session 8, scaffold only" when the real state was Session 18) — this
+session verified the actual state directly from `09-decision-log.md` and
+`routes/api.php` before writing anything, rather than repeating that
+mistake a second time.
+
+**Full reasoning: D-0051.** Summary: this is choice **(b)** under D-0045's
+Standing Rule (no real pilot exists, R-01 unchanged; this session was
+opened with a specific, bounded, external work order, not a request to
+re-evaluate whether to keep building) — stated for the record, same
+posture as D-0046, not a new precedent.
+
+**What was actually built, compressed (see D-0051 for the full accounting):**
+
+- **Backend:** six new owner-authenticated endpoint groups closing gaps
+  `05-api-contracts.md` had named as "still unbuilt" since as early as
+  Session 6 — services (`GET`/`PATCH`), staff (`GET`/`POST`/`PATCH`),
+  working hours (`GET`/`PUT`, whole-week replace), availability exceptions
+  (`GET`/`POST`/`DELETE`), appointment detail + a new, deliberately
+  separate **cancellation** action (bookkeeping only — no Stripe call, no
+  refund, preserving D-0042's original reasoning for keeping cancellation
+  and refund as distinct, separately-scoped workflows), a reminder-delivery
+  log, and a queue-health endpoint that deliberately does NOT invent a
+  per-job success/failure count this codebase has no table for (no
+  `failed_jobs` migration exists — RabbitMQ, not Laravel's database queue
+  driver, is the transport) — instead reading the RabbitMQ management
+  plugin's real HTTP API (best-effort) plus real `notification_deliveries`
+  outcome counts this codebase already persists.
+- **Frontend:** the single `owner/index.vue` (login + appointment list
+  crammed into one file) split into a shared `layouts/owner.vue` + a
+  `useOwnerSession` composable, plus five new dedicated pages (services,
+  availability, appointment detail, reminders, queue health). D-0002/D-0038
+  (decoupled Laravel API + Nuxt, monorepo `frontend/`) was reused as-is —
+  no reason found to revisit it.
+- **R-08 (real-browser verification) narrowed, not closed — read this
+  before assuming the frontend "just works":** this session's own first
+  real Playwright run, against a pre-installed Chromium unavailable to
+  Sessions 16/17/19 (each explicitly re-checked and confirmed absent), found
+  and fixed two genuine bugs no non-browser test in this project could have
+  caught: `app.vue` never wrapped `<NuxtPage>` in `<NuxtLayout>`, so every
+  page using `definePageMeta({ layout })` — every admin page this session
+  added — rendered completely blank; and `config/cors.php`'s
+  `allowed_headers: ['*']` is rejected by a real browser's credentialed-CORS
+  enforcement, silently blocking the public booking form's own POST behind
+  a generic "could not reach the server" message. Two E2E specs now cover
+  the full public J1 booking flow (closing the loop into the owner
+  dashboard to confirm the booking appears, tenant-scoped) and a full
+  authenticated walk across every owner nav page — but the owner
+  mark-attended/no-show buttons, cancellation, and most of the new admin
+  forms' actual submission paths have still never been exercised by a real
+  click. See D-0051 and `10-risk-register.md`'s R-08 row for the precise
+  boundary.
+- **Frontend tests, for the first time in this project:** Vitest +
+  `@nuxt/test-utils` + `@vue/test-utils` under `frontend/tests/unit/` — a
+  pure-function test, composable tests for `useOwnerSession` (which found
+  and fixed a real bug of its own: `logout()` re-threw past its own
+  `finally` block on a failed API call, leaving the caller with an
+  unhandled rejection instead of ever returning to the login screen), and a
+  component test for the login form.
+- **Environment note, since a future session may hit the same thing:** this
+  session's container had no Docker daemon available (`docker-compose.yml`
+  could not be used) — Postgres/Redis/RabbitMQ were installed and run
+  directly via `apt`/`service` instead, and GitHub's REST API
+  (`api.github.com`) was rate-limited/scoped in a way plain `git clone` of
+  public repos was not, which blocked a normal `composer install` of
+  `phpstan/phpstan` (a dist-only package with no usable git source) until
+  its release phar was fetched directly from
+  `github.com/.../releases/download/...` (a different host than the
+  blocked one) and wired in via a temporary local `path` repository,
+  reverted before this session's own commits. Static analysis
+  (`composer analyse`) was verified passing locally this way but the
+  repository's own `composer.json`/`composer.lock` are untouched by this
+  workaround.
+
+**Files touched this session:** `09-decision-log.md` (D-0051),
+`10-risk-register.md` (R-08 narrowed), this file. Backend: six new
+`app/Http/Controllers/Api/Owner/*` controllers (`ServiceController`
+extended, `StaffController`/`WorkingHourController`/
+`AvailabilityExceptionController`/`NotificationController`/
+`QueueHealthController` new), `AppointmentController` extended
+(`show`/`cancel`), `routes/api.php`, `config/services.php`
+(`rabbitmq_management`), `config/cors.php` (`allowed_headers` fix),
+`.env.example`, seven new Feature test files. Frontend: `app.vue`
+(`<NuxtLayout>` fix), `layouts/owner.vue` (new), `composables/
+useOwnerSession.ts` (new), `types/owner.ts` (new), five new page
+directories under `pages/owner/`, `playwright.config.ts` +
+`tests/e2e/booking-flow.spec.ts` (new), `vitest.config.ts` +
+`tests/unit/*` (new), a new `CLAUDE.md` at the repository root (quota-
+reduction guidance for future sessions, per this session's own explicit
+brief). **Not touched, deliberately, per D-0051's stated scope:** Stripe
+Connect onboarding, automatic off-session balance charging, the
+post-appointment rebooking prompt, `charge.dispute.created`'s
+tenant-resolution gap (D-0048), the no-show count on the owner dashboard
+(FR-15).
+
+**Next recommended session:** unchanged in substance from Session 18's own
+standing instruction — R-01 (no real pilot) remains the standing top risk.
+If building continues absent a pilot, the natural next bounded pieces are:
+extending real-browser (Playwright) coverage to the owner actions this
+session's own E2E suite did not reach (mark-attended/no-show, cancellation,
+the services/availability forms' actual submission paths); the
+`charge.dispute.created` tenant-resolution gap (D-0048); the no-show count
+on the owner dashboard (FR-15); and `05-api-contracts.md`'s still-unbuilt
+rows this session did not touch (refund, off-session balance charge,
+customer erasure/export, re-invite, Stripe Connect onboarding-link).

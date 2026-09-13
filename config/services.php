@@ -44,4 +44,21 @@ return [
         'application_fee_bps' => (int) env('STRIPE_APPLICATION_FEE_BPS', 0),
     ],
 
+    // D-0051: the RabbitMQ management plugin's HTTP API (already enabled in
+    // docker-compose.yml's `rabbitmq` service image, "for local debugging"
+    // — this is that same API, now also read by
+    // OwnerQueueHealthController for the admin frontend's queue-health
+    // view). Deliberately a distinct, separate credential/URL from the
+    // AMQP connection config/queue.php's `rabbitmq` connection uses — the
+    // management API is a different port and protocol (HTTP, not AMQP),
+    // even though it's the same broker and, in every environment this
+    // project actually runs in, the same username/password.
+    'rabbitmq_management' => [
+        'url' => env('RABBITMQ_MANAGEMENT_URL', 'http://127.0.0.1:15672'),
+        'user' => env('RABBITMQ_USER', 'bookslot'),
+        'password' => env('RABBITMQ_PASSWORD', 'bookslot_local_only'),
+        'vhost' => env('RABBITMQ_VHOST', '/'),
+        'queue' => env('RABBITMQ_QUEUE', 'bookslot'),
+    ],
+
 ];

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\Owner;
 use App\Http\Controllers\Controller;
 use App\Models\Appointment;
 use App\Models\BookingEvent;
+use App\Models\NotificationDelivery;
 use App\Models\Payment;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -37,6 +38,13 @@ class AppointmentController extends Controller
      */
     private const VALID_TARGET_STATUSES = ['completed', 'no_show'];
 
+    /**
+     * D-0051: only a still-live booking can be cancelled — a terminal
+     * status (`completed`, `no_show`, already-`cancelled`) has nothing left
+     * to cancel.
+     */
+    private const CANCELLABLE_STATUSES = ['pending_payment', 'confirmed'];
+
     public function index(Request $request): JsonResponse
     {
         $validated = $request->validate([
@@ -64,6 +72,105 @@ class AppointmentController extends Controller
         return response()->json([
             'appointments' => $appointments->map(fn (Appointment $appointment) => $this->present($appointment)),
         ]);
+    }
+
+    /**
+     * D-0051: the detail view the frontend's booking-detail page needs —
+     * every payment (deposit and, if it exists, balance) with its real
+     * Stripe-webhook-derived status, the accepted mandate, the reminder
+     * (`notification_deliveries`) log, and the full `booking_events` audit
+     * trail for this one appointment. Never exposes raw Stripe IDs — those
+     * are an internal reconciliation detail, not something a studio owner
+     * needs to see or could act on from this screen.
+     */
+    public function show(string $id): JsonResponse
+    {
+        $appointment = Appointment::query()->with(['customer', 'service', 'staff'])->find($id);
+
+        if ($appointment === null) {
+            return response()->json(['error' => 'NOT_FOUND'], 404);
+        }
+
+        $payments = Payment::query()->where('appointment_id', $appointment->id)->get();
+
+        return response()->json([
+            ...$this->present($appointment),
+            'customer_email' => $appointment->customer?->email,
+            'customer_phone' => $appointment->customer?->phone,
+            'notes' => $appointment->notes,
+            'cancelled_by' => $appointment->cancelled_by,
+            'cancelled_reason' => $appointment->cancelled_reason,
+            'cancelled_at' => $appointment->cancelled_at,
+            'payments' => $payments->map(fn (Payment $payment) => [
+                'id' => $payment->id,
+                'type' => $payment->type,
+                'status' => $payment->status,
+                'amount' => $payment->amount,
+                'currency' => $payment->currency,
+                'failure_code' => $payment->failure_code,
+                'created_at' => $payment->created_at,
+            ]),
+            'reminders' => NotificationDelivery::query()
+                ->where('appointment_id', $appointment->id)
+                ->orderBy('scheduled_for')
+                ->get(['id', 'purpose', 'channel', 'scheduled_for', 'sent_at', 'status']),
+            'events' => BookingEvent::query()
+                ->where('appointment_id', $appointment->id)
+                ->orderBy('created_at')
+                ->get(['id', 'actor_type', 'event_type', 'from_status', 'to_status', 'created_at']),
+        ]);
+    }
+
+    /**
+     * D-0051: a new, dedicated action rather than a third value accepted by
+     * `updateStatus()` — D-0042 (Session 17) deliberately kept `cancelled`
+     * out of that endpoint's accepted target list, reasoning it as "a
+     * distinct workflow with its own refund considerations, not yet
+     * reasoned through." That reasoning still holds: this endpoint
+     * deliberately does NOT touch Stripe or create a `refunds` row — it is
+     * bookkeeping only (status + audit trail), identical in spirit to how
+     * `updateStatus()` already treats `no_show` forfeiture as bookkeeping
+     * on an already-captured deposit. A studio owner who needs to actually
+     * refund money still has no endpoint for that (05-api-contracts.md's
+     * endpoint 5, `POST .../refund`, remains unbuilt) — this is named here,
+     * not silently implied as "cancel = refunded."
+     */
+    public function cancel(Request $request, string $id): JsonResponse
+    {
+        $validated = $request->validate([
+            'reason' => ['nullable', 'string'],
+        ]);
+
+        $appointment = Appointment::query()->find($id);
+
+        if ($appointment === null) {
+            return response()->json(['error' => 'NOT_FOUND'], 404);
+        }
+
+        if (! in_array($appointment->status, self::CANCELLABLE_STATUSES, true)) {
+            return response()->json(['error' => 'INVALID_STATUS_TRANSITION'], 409);
+        }
+
+        $reason = $validated['reason'] ?? null;
+
+        $fromStatus = $appointment->status;
+        $appointment->status = 'cancelled';
+        $appointment->cancelled_by = 'studio';
+        $appointment->cancelled_reason = $reason;
+        $appointment->cancelled_at = now();
+        $appointment->save();
+
+        BookingEvent::query()->create([
+            'appointment_id' => $appointment->id,
+            'actor_type' => 'owner',
+            'actor_id' => $request->user()->id,
+            'event_type' => 'status_changed',
+            'from_status' => $fromStatus,
+            'to_status' => 'cancelled',
+            'metadata' => $reason !== null ? ['reason' => $reason] : null,
+        ]);
+
+        return response()->json($this->present($appointment->fresh(['customer', 'service', 'staff'])));
     }
 
     public function updateStatus(Request $request, string $id): JsonResponse
