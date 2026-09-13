@@ -21,6 +21,17 @@ use App\Models\BookingEvent;
  * appointment to `confirmed`), or another process already cancelled it,
  * this job is a no-op — never a double-cancel, never undoing a real
  * confirmed booking.
+ *
+ * Also re-verifies the hold window has actually elapsed (by wall clock,
+ * against the appointment's own created_at) before acting, rather than
+ * trusting "if I'm running, enough time must have passed": the `sync`
+ * queue connection (.env.testing, this project's fast test gate) has no
+ * concept of a delayed dispatch at all and runs a job the instant it's
+ * pushed — found by executing BookingControllerTest under this job's own
+ * addition, not assumed safe in advance. A still-too-early run is a no-op,
+ * the same as any other precondition-not-met case above; the real,
+ * delay-respecting path is proven separately, against a real broker, by
+ * RabbitMqQueueIntegrationTest (`queue-broker` group).
  */
 class ReleaseExpiredPendingBookingJob extends TenantScopedJob
 {
@@ -36,6 +47,16 @@ class ReleaseExpiredPendingBookingJob extends TenantScopedJob
         $appointment = Appointment::query()->find($this->appointmentId);
 
         if ($appointment === null || $appointment->status !== 'pending_payment') {
+            return;
+        }
+
+        // ->copy() deliberately: Appointment casts created_at to a
+        // mutable Carbon (not CarbonImmutable) — calling addMinutes()
+        // directly on it would silently advance $appointment->created_at
+        // itself for the rest of this method (e.g. the save() below).
+        $holdExpiresAt = $appointment->created_at->copy()->addMinutes(config('booking.hold_window_minutes'));
+
+        if (now()->lessThan($holdExpiresAt)) {
             return;
         }
 

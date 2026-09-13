@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Mail\AppointmentReminderMail;
 use App\Models\NotificationDelivery;
+use App\Tenancy\TenantContext;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Throwable;
@@ -87,12 +88,24 @@ class SendAppointmentReminderJob extends TenantScopedJob
      * itself ever writes 'failed' for a delivery attempt that threw, as
      * opposed to handle()'s own early-exit 'failed' for a delivery that
      * was never sendable in the first place.
+     *
+     * Unlike handle(), this callback is invoked directly by
+     * CallQueuedHandler::failed() — it never runs through this job's own
+     * middleware() pipeline (TenantScopedJob's SetsTenantContext), so no
+     * tenant GUC is set here unless established explicitly. Found by
+     * executing this job's own failure-path test: without this
+     * TenantContext::run() wrapper, the update below is silently filtered
+     * to zero rows by RLS rather than erroring, so the delivery row stays
+     * 'scheduled' forever with no visible failure at all — worse than a
+     * thrown exception would have been.
      */
     public function failed(?Throwable $exception): void
     {
-        NotificationDelivery::query()
-            ->where('id', $this->notificationDeliveryId)
-            ->update(['status' => 'failed']);
+        TenantContext::run($this->tenantId, function () {
+            NotificationDelivery::query()
+                ->where('id', $this->notificationDeliveryId)
+                ->update(['status' => 'failed']);
+        });
 
         Log::error('Appointment reminder permanently failed', [
             'notification_delivery_id' => $this->notificationDeliveryId,

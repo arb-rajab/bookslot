@@ -14,10 +14,20 @@ use Tests\Support\BookingFixture;
  * status-transition logic in isolation from RabbitMqQueue's actual delay
  * mechanism, which RabbitMqQueueIntegrationTest (queue-broker group)
  * proves separately, against a real broker.
+ *
+ * handle() re-verifies the hold window has actually elapsed against the
+ * appointment's own created_at (found necessary by executing
+ * BookingControllerTest under this job's addition — the `sync` connection
+ * ignores delay() entirely and runs a job the instant it's dispatched), so
+ * a test proving the release itself must backdate created_at rather than
+ * relying on dispatch timing alone.
  */
 test('a still-pending appointment past its hold window is released back to availability', function () {
     $tenant = Tenant::factory()->create();
-    $appointment = BookingFixture::appointmentFor($tenant, ['status' => 'pending_payment']);
+    $appointment = BookingFixture::appointmentFor($tenant, [
+        'status' => 'pending_payment',
+        'created_at' => now()->subMinutes(config('booking.hold_window_minutes') + 1),
+    ]);
 
     ReleaseExpiredPendingBookingJob::dispatchSync($tenant->id, $appointment->id);
 
@@ -33,6 +43,22 @@ test('a still-pending appointment past its hold window is released back to avail
         expect($event->actor_type)->toBe('system');
         expect($event->from_status)->toBe('pending_payment');
         expect($event->to_status)->toBe('cancelled');
+    });
+});
+
+test('a still-pending appointment whose hold window has not actually elapsed yet is left untouched', function () {
+    $tenant = Tenant::factory()->create();
+    $appointment = BookingFixture::appointmentFor($tenant, [
+        'status' => 'pending_payment',
+        'created_at' => now(),
+    ]);
+
+    ReleaseExpiredPendingBookingJob::dispatchSync($tenant->id, $appointment->id);
+
+    BookingFixture::assertStatus($tenant, $appointment->id, 'pending_payment');
+
+    TenantContext::run($tenant->id, function () use ($appointment) {
+        expect(BookingEvent::query()->where('appointment_id', $appointment->id)->count())->toBe(0);
     });
 });
 
