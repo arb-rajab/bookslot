@@ -1647,3 +1647,137 @@ the services/availability forms' actual submission paths); the
 on the owner dashboard (FR-15); and `05-api-contracts.md`'s still-unbuilt
 rows this session did not touch (refund, off-session balance charge,
 customer erasure/export, re-invite, Stripe Connect onboarding-link).
+
+## Amendment (Session 21, 2026-09-15) — a public, customer-facing cancellation endpoint built (D-0052), reusing the existing `manage_booking` token
+
+**Work order, verified against real state before writing anything:** an
+external request — `bookslot-mobile` (a separate public repo, out of
+scope here) was built against `POST /api/tenants/{slug}/bookings` and
+needs a matching customer-facing cancellation call. This session's own
+brief described this endpoint as entirely new; that's correct — `grep`ing
+`routes/api.php` and `05-api-contracts.md` (line 147, `POST
+/api/bookings/manage/{token}/cancel`) confirmed the row had been sketched
+as a future target since at least Session 6 but nothing had ever
+implemented it. Session 20's Amendment (this file, immediately above) is
+this project's real current checkpoint, confirmed directly rather than
+trusted from the work order's own description — no staleness repeat this
+time.
+
+**What was built:** `POST /api/bookings/manage/{token}/cancel`
+(`ManageBookingController::cancel()`, extended, not a new controller),
+under the identical `resolve.tenant.token:manage_booking` +
+`tenant.context` middleware pair the existing `GET
+/api/bookings/manage/{token}` lookup route already uses. Bookkeeping only
+— `status = cancelled`, `cancelled_by = 'customer'`, an optional `reason`,
+a `booking_events` row (`actor_type = 'customer'`, `actor_id = null`) —
+identical discipline to `Owner\AppointmentController::cancel()` (D-0051):
+never touches Stripe, never creates a `refunds` row. D-0036 (Stripe stays
+test-mode-only, permanently) is untouched by this work — this path never
+reaches `PaymentIntentGateway`. J4 (no automatic no-show detection) is
+untouched — this is exclusively an explicit, request-triggered customer
+action.
+
+**The auth/security design decision, made explicitly per this session's
+own brief's instruction to think it through rather than default:**
+reused the existing `manage_booking` purpose of `SignedTenantToken`
+(D-0021) — already minted at booking-creation time
+(`BookingController::store()`'s `manage_token` response field) and
+already the customer's proof of "I may manage this specific booking" —
+rather than inventing a second, cancellation-specific token. See D-0052
+(`09-decision-log.md`) for the full reasoning, including the one real,
+named residual property of this choice: `manage_booking` carries no
+`expires_at`, so this cancellation capability is live for the life of the
+booking, exactly the same exposure the existing lookup endpoint already
+had — not a new risk this decision introduces.
+
+**Tests:** 8 new Pest cases added to the existing
+`tests/Feature/Api/ManageBookingControllerTest.php` (success on both
+cancellable statuses, rejection on every terminal status including
+already-`cancelled`, wrong-purpose/tampered-token rejection mirroring the
+lookup endpoint's own coverage, and a real cross-tenant isolation case).
+Full fast gate re-run after this change: 139 passed, 0 failed (the
+`queue-broker` group's 3 RabbitMQ-integration tests are excluded from
+this gate by design, per `composer.json`'s own `test:fast` script, and
+were separately confirmed passing once a real local RabbitMQ broker was
+installed and its `bookslot`/`bookslot_local_only` user created for this
+session's own manual verification — see the quota note below on why that
+setup step isn't optional for this project's E2E suite specifically, not
+just its own `queue-broker` Feature tests).
+
+**E2E coverage, and the judgment call behind its shape, stated so it
+isn't overclaimed:** `frontend/` has no customer-facing "manage my
+booking" page — the only real consumer of this endpoint is
+`bookslot-mobile`, out of scope for this session, and building a parallel
+customer UI page inside this project's own Nuxt app with nothing here
+that actually needs it would be scope creep the work order never asked
+for. The new spec (`frontend/tests/e2e/manage-booking-cancel.spec.ts`)
+therefore drives the real endpoint directly over HTTP (Playwright's
+`request` fixture — real Postgres/Redis/RabbitMQ-backed Laravel API, no
+mocks, same discipline as every other spec in this suite), creates a real
+pending booking through the real public booking endpoint first, cancels
+it through the new endpoint, asserts a second cancel attempt is correctly
+rejected (`409`), then loads the real owner appointment-detail page **in
+the real browser** and confirms the cancelled state renders
+(`cancelled_by: customer`) — plus one negative case (a tampered token
+rejected identically to the lookup endpoint's own tamper case). All 4 E2E
+specs in the suite (the 2 pre-existing plus these 2 new ones) pass
+against a real, freshly seeded `demo-studio` tenant. This closes R-08's
+gap for the appointment-detail page's cancelled-state rendering
+specifically — it does **not** exercise `Owner\AppointmentController::
+cancel()`'s own UI button, or the mark-attended/no-show buttons, which
+remain exactly as unclicked as Session 20 left them. `10-risk-register.md`
+R-08 is updated to say this precisely, not left implying more than was
+actually proven.
+
+**R-08/backlog note, checked and updated honestly rather than left
+stale:** the work order asked this session to check whether this closes
+R-08's "mark-attended/no-show/cancellation click E2E coverage" backlog
+item. It does not, fully — R-08 tracks three specific unclicked owner-side
+controls (mark-attended, no-show, the owner's own cancel button) plus
+this session's now-closed customer-cancellation gap, which was a
+different, newly-discovered item (the customer-facing endpoint didn't
+exist until this session, so there was no owner-side button for it to
+name in the first place). R-08 is narrowed further, not closed — see its
+own row for the precise, updated boundary.
+
+**Docs touched this session:** `05-api-contracts.md` (endpoint 3b
+detailed, the public-endpoint-list row marked built), `09-decision-log.md`
+(D-0052), `10-risk-register.md` (R-08 narrowed further), this file, and
+the repository root `CLAUDE.md` (new quota-reduction notes below).
+Backend: `app/Http/Controllers/Api/ManageBookingController.php`,
+`routes/api.php`, `tests/Feature/Api/ManageBookingControllerTest.php`.
+Frontend: `frontend/tests/e2e/manage-booking-cancel.spec.ts` (new).
+
+**Dependabot/vulnerability check, done and reported precisely (per this
+session's own standing instruction to never silently claim "none found"
+without genuinely checking):** this session's tools include no GitHub
+Dependabot-alerts API access (the `github` MCP server's toolset was
+searched — no `dependabot`/`alert`-named tool exists among it), so
+Dependabot's own alert list could not be directly enumerated and is not
+claimed as checked. What **was** actually run, as a real substitute
+covering the same dependency-vulnerability question from each ecosystem's
+own tooling: `composer audit` (run implicitly by `composer update`'s own
+output during this session's dependency install — "No security
+vulnerability advisories found") and `npm audit` (run implicitly by `npm
+install` — "found 0 vulnerabilities"). Neither is a Dependabot-alert
+enumeration; both are real, independently-sourced vulnerability-database
+checks against this exact `composer.lock`/`package-lock.json`, run this
+session, not assumed. If GitHub Dependabot has open alerts these two
+commands don't independently know about (a real, if currently unlikely,
+gap — for example an alert scoped to a GitHub-specific advisory not yet
+mirrored into the FriendsOfPHP/advisory-db or npm's own audit registry),
+that gap is real and stated here, not silently closed.
+
+**Next recommended session:** unchanged in substance from Session
+18/20's own standing instruction — R-01 (no real pilot) remains the
+standing top risk. If building continues absent a pilot: the
+`bookslot-mobile` repository (out of scope here) should be checked against
+this endpoint's actual response shape once that repo's own session picks
+it up, since this session had no access to verify the two sides agree on
+field names beyond what `05-api-contracts.md` now documents; R-08's
+remaining owner-side click gaps (mark-attended, no-show, the owner's own
+cancel button, services/availability form submission); the
+`charge.dispute.created` tenant-resolution gap (D-0048); and
+`05-api-contracts.md`'s other still-unbuilt rows (refund, off-session
+balance charge, customer erasure/export, re-invite, Stripe Connect
+onboarding-link).

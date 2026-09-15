@@ -61,6 +61,40 @@ each needs its own grants. Skipping this produces a confusing
 `SQLSTATE[42501]: permission denied for table X` that looks like an RLS
 bug but isn't.
 
+**A fresh container has neither the Postgres roles nor either database —
+this isn't just a grants step.** `CREATE ROLE bookslot_migrator ...
+BYPASSRLS CREATEDB` and `CREATE ROLE bookslot_app ...` (passwords from
+`.env`/`.env.testing`) come first, then `createdb -O bookslot_migrator
+bookslot` and `... bookslot_test`, THEN the grants block above, THEN
+`php artisan migrate:fresh --seed --database=pgsql_migrator`. Session 20's
+note above reads like the roles/DBs already exist; Session 21 found they
+don't, on a genuinely fresh container.
+
+**`apt-get install rabbitmq-server` does NOT leave it running** — the
+package's own postinst prints `policy-rc.d denied execution of start`
+(a container-image default that blocks auto-start-on-install) and exits
+0 anyway; run `service rabbitmq-server start` yourself afterward, same as
+Postgres/Redis. **The default `guest` user cannot authenticate as this
+app's configured RabbitMQ credentials** — `.env`/`.env.testing` set
+`RABBITMQ_USER=bookslot`/`RABBITMQ_PASSWORD=bookslot_local_only`, which
+don't exist on a fresh broker, producing `ACCESS_REFUSED - Login was
+refused using authentication mechanism AMQPLAIN` the first time ANY code
+path dispatches a job — not just the `queue-broker` Pest group's own
+tests. **This matters even for something as small as one new Feature
+test:** `BookingController::store()` (the only way to create an
+appointment through the real HTTP API) unconditionally dispatches
+`ReleaseExpiredPendingBookingJob` after every successful booking — a real
+RabbitMQ broker with a working `bookslot` user must be up before that
+endpoint can be called at all, in Feature tests or in a real browser/E2E
+run alike, even if the specific behavior under test has nothing to do
+with the queue:
+
+```bash
+rabbitmqctl add_user bookslot bookslot_local_only
+rabbitmqctl set_permissions -p / bookslot ".*" ".*" ".*"
+rabbitmqctl set_user_tags bookslot administrator
+```
+
 ## Composer install in this sandbox
 
 Anonymous `api.github.com` REST calls (used for dist zipball downloads)
@@ -126,6 +160,24 @@ of preference:
   running `npx playwright install` (which tries to download a new one and
   may not have network access to succeed, or may waste time/bandwidth
   downloading a browser that's already there under a different path).
+- **Playwright's `webServer` (`php artisan serve`, `cwd: '..'`) reads
+  whatever `.env` is sitting in the repo root at the time — NOT
+  `.env.testing`.** `phpunit.xml` sets `APP_ENV=testing`, which is what
+  makes Pest/`php artisan test` load `.env.testing` (pointing at
+  `bookslot_test`) automatically regardless of the root `.env` file; a
+  plain `php artisan serve` has no such override and just reads `.env`
+  normally. If `.env` still points at `bookslot_test` (e.g. left over from
+  copying `.env.testing` over it to run migrations for the Pest suite),
+  every E2E-seeded fixture (the `demo-studio` tenant, its owner login)
+  will be silently invisible to the E2E-driven server — `GET
+  /api/tenants/demo-studio/services` 404s as `NOT_FOUND`, indistinguishable
+  from "seeding never ran" at a glance. Keep `.env` pointed at the plain
+  `bookslot` dev database, seeded separately (`php artisan migrate:fresh
+  --seed --database=pgsql_migrator` with `.env` set to `bookslot`) from
+  whatever `bookslot_test` state the Pest suite has independently built up
+  — the two databases, and the two env files, are not interchangeable for
+  this purpose even though both ultimately point at "the same kind of
+  local Postgres."
 
 ## Test suite shape — don't run more than you need
 
