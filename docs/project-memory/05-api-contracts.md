@@ -1,7 +1,7 @@
 # API / Event Contracts
 > Purpose: the interface others depend on.
 > Project: bookslot (PRIVATE track)
-> Last updated: 2026-08-26 (Session 2 — Requirements and Data Model; amended Session 5 — mandate acceptance field added, FR-16 scope resolved; amended Session 6 — reconciled against D-0009/D-0012/D-0014, webhook coverage for the off-session balance charge clarified; amended Session 7 — endpoint 3 redesigned around D-0021's booking-scoped token, closing the tenant-context gap Session 6 raised and didn't fix; amended Session 9 — three endpoints actually implemented for the first time, with two real gaps found and raised rather than invented; amended Session 10 — both Session 9 gaps closed: auth wired (D-0029), booking creation built for real (D-0030); amended Session 16 — endpoint 1 (availability) built for real (D-0039), first real frontend consumer, a real CSRF-on-public-endpoints finding recorded (D-0041); amended Session 17 — the owner appointment list/status endpoints built (D-0042), a serious pre-existing owner/staff re-authentication bug found and fixed (D-0043))
+> Last updated: 2026-08-26 (Session 2 — Requirements and Data Model; amended Session 5 — mandate acceptance field added, FR-16 scope resolved; amended Session 6 — reconciled against D-0009/D-0012/D-0014, webhook coverage for the off-session balance charge clarified; amended Session 7 — endpoint 3 redesigned around D-0021's booking-scoped token, closing the tenant-context gap Session 6 raised and didn't fix; amended Session 9 — three endpoints actually implemented for the first time, with two real gaps found and raised rather than invented; amended Session 10 — both Session 9 gaps closed: auth wired (D-0029), booking creation built for real (D-0030); amended Session 16 — endpoint 1 (availability) built for real (D-0039), first real frontend consumer, a real CSRF-on-public-endpoints finding recorded (D-0041); amended Session 17 — the owner appointment list/status endpoints built (D-0042), a serious pre-existing owner/staff re-authentication bug found and fixed (D-0043); amended Session 21 — endpoint 3b (`POST /api/bookings/manage/{token}/cancel`, customer-initiated cancellation) built, closing this row from "sketch, not built" to real (D-0052))
 
 ## Amendment (Session 17, 2026-08-26) — owner dashboard endpoints built; a real, previously-undetected owner/staff auth bug found and fixed
 
@@ -144,7 +144,7 @@ and rate-limit numbers are still future-session work (see Deferred below).
 | `POST /api/logout` | Shared by every role — **built Session 10, D-0029** | — |
 | `POST /api/bookings/{token}/confirm-payment` | Confirm/retry the deposit PaymentIntent for an existing `pending_payment` booking, keyed by the booking-scoped `payment_confirmation_token` (D-0021) — **not** a raw `appointment_id`, see endpoint 3 below | J1, J2 |
 | `GET /api/bookings/manage/{token}` | Look up a booking via the signed manage-booking link (no login) | J1, J7 |
-| `POST /api/bookings/manage/{token}/cancel` | Customer-initiated cancellation | J7 |
+| `POST /api/bookings/manage/{token}/cancel` | Customer-initiated cancellation, bookkeeping only (no refund) — **built Session 21, D-0052**, see endpoint 3b below | J7 |
 
 ### Studio owner (authenticated, tenant-scoped)
 
@@ -310,6 +310,34 @@ different card, per J2, using the same token again.
   the hold window already lapsed and a scheduled job already moved the
   appointment to `cancelled` — distinct from `SLOT_ALREADY_BOOKED`, since
   this is "your own hold expired," not "someone else won the race."
+
+### 3b. `POST /api/bookings/manage/{token}/cancel` — built Session 21, D-0052
+
+Customer-initiated self-service cancellation, the counterpart to endpoint 4's
+studio-initiated `cancel()` (D-0051) — same bookkeeping-only discipline (no
+Stripe call, no `refunds` row), different actor attribution.
+
+**Request:** the same `manage_token` endpoint 2's `201` response already
+returns (`GET .../manage/{token}` above uses the identical token) — **not**
+a new token purpose, per D-0052. Optional body: `{ "reason": "…" }`.
+
+**Mechanism:** identical token verification to `GET .../manage/{token}`
+(signature, `purpose = manage_booking`, expiry — D-0021), then the same
+tenant-context establishment from the token's own signed `tenant_id`. Only
+`pending_payment`/`confirmed` appointments are cancellable (mirrors
+`Owner\AppointmentController::CANCELLABLE_STATUSES`, D-0051); a terminal
+status, including an already-`cancelled` one, is rejected rather than
+silently treated as idempotent.
+
+**Response `200`:** `{ "appointment_id", "status": "cancelled", "starts_at", "ends_at" }`.
+
+**Errors:**
+- `404 { "error": "INVALID_OR_EXPIRED_TOKEN" }` — identical to the lookup
+  endpoint's own token-verification failure (bad signature, wrong purpose,
+  expired) — no separate raw id in this request to leak a distinct error
+  against.
+- `409 { "error": "INVALID_STATUS_TRANSITION" }` — the appointment is
+  already `completed`/`no_show`/`cancelled`.
 
 ### 4. `PATCH /api/owner/appointments/{id}/status` — `completed`/`no_show` built Session 17, D-0042
 

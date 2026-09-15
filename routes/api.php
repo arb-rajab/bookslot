@@ -54,6 +54,15 @@ Route::middleware(['resolve.tenant.slug'])
 Route::middleware(['resolve.tenant.token:manage_booking', 'tenant.context'])
     ->get('bookings/manage/{token}', [ManageBookingController::class, 'show']);
 
+// D-0052: customer-facing self-service cancellation, reusing the same
+// manage_booking token (and the same middleware pair) as the lookup route
+// above — no new token purpose, no new issuance path. Bookkeeping only
+// (status + audit trail), same discipline as
+// Owner\AppointmentController::cancel — never touches Stripe, so this is
+// safe under `tenant.context`'s whole-request transaction wrap.
+Route::middleware(['resolve.tenant.token:manage_booking', 'tenant.context'])
+    ->post('bookings/manage/{token}/cancel', [ManageBookingController::class, 'cancel']);
+
 // D-0033 (amends D-0027/D-0030's principle to a second Stripe-touching
 // route): deliberately NOT under `tenant.context` — this controller now
 // re-checks the PaymentIntent against Stripe mid-request, and must not hold
