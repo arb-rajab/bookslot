@@ -52,4 +52,14 @@ final class StripePaymentIntentGateway implements PaymentIntentGateway
             $paymentIntent->last_payment_error->message ?? null,
         );
     }
+
+    public function refund(string $paymentIntentId, int $amountMinorUnits, ?string $reason): RefundResult
+    {
+        $refund = $this->client->refunds->create([
+            'payment_intent' => $paymentIntentId,
+            'amount' => $amountMinorUnits,
+        ]);
+
+        return new RefundResult($refund->id, $refund->status);
+    }
 }

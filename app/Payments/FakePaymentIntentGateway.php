@@ -40,4 +40,11 @@ final class FakePaymentIntentGateway implements PaymentIntentGateway
     {
         return new PaymentIntentStatus($paymentIntentId, 'succeeded', 'pm_fake_1234567890', null, null);
     }
+
+    public function refund(string $paymentIntentId, int $amountMinorUnits, ?string $reason): RefundResult
+    {
+        $id = 're_fake_'.substr(md5($paymentIntentId.$amountMinorUnits), 0, 16);
+
+        return new RefundResult($id, 'succeeded');
+    }
 }

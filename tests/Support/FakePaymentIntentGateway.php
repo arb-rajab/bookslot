@@ -5,6 +5,7 @@ namespace Tests\Support;
 use App\Payments\PaymentIntentGateway;
 use App\Payments\PaymentIntentResult;
 use App\Payments\PaymentIntentStatus;
+use App\Payments\RefundResult;
 use RuntimeException;
 
 /**
@@ -19,6 +20,8 @@ final class FakePaymentIntentGateway implements PaymentIntentGateway
     private int $callCount = 0;
 
     private int $retrieveCallCount = 0;
+
+    private int $refundCallCount = 0;
 
     /**
      * @param  string|list<string>  $retrieveStatus  A single status every
@@ -41,6 +44,9 @@ final class FakePaymentIntentGateway implements PaymentIntentGateway
         private readonly ?string $retrievePaymentMethodId = 'pm_fake_1234567890',
         private readonly ?string $retrieveLastErrorCode = null,
         private readonly ?string $retrieveLastErrorMessage = null,
+        private readonly bool $shouldFailRefund = false,
+        private readonly ?string $refundId = null,
+        private readonly string $refundStatus = 'succeeded',
     ) {}
 
     public function create(
@@ -93,5 +99,23 @@ final class FakePaymentIntentGateway implements PaymentIntentGateway
     public function retrieveCallCount(): int
     {
         return $this->retrieveCallCount;
+    }
+
+    public function refund(string $paymentIntentId, int $amountMinorUnits, ?string $reason): RefundResult
+    {
+        $this->refundCallCount++;
+
+        if ($this->shouldFailRefund) {
+            throw new RuntimeException('Simulated Stripe refund failure for D-0056 validation.');
+        }
+
+        $id = $this->refundId ?? 're_fake_'.substr(md5($paymentIntentId.$amountMinorUnits), 0, 16);
+
+        return new RefundResult($id, $this->refundStatus);
+    }
+
+    public function refundCallCount(): int
+    {
+        return $this->refundCallCount;
     }
 }
