@@ -288,3 +288,65 @@ of preference:
   endpoint's response feeds a frontend state slot another, richer endpoint
   also feeds, grep for every consumer of that state slot before trusting a
   narrower response shape is safe to return from a new or changed action.
+
+## Session 24 additions — Dependabot PR review findings
+
+- **`vue-tsc@^3.3.11` (pinned in `frontend/package.json`) is incompatible
+  with TypeScript 7.x right now.** TS 7.0.2 removed the `./lib/tsc`
+  subpath from its package `exports` map; the installed `vue-tsc` still
+  resolves the type-checker through that removed subpath and crashes
+  immediately with `ERR_PACKAGE_PATH_NOT_EXPORTED` before it typechecks a
+  single file. This is not theoretical — it's the actual, confirmed cause
+  of the real CI failure on the `dependabot/npm_and_yarn/frontend/
+  typescript-7.0.2` PR (checked by pulling the job log directly, not just
+  trusting the red X). Don't merge a TypeScript major bump here until
+  `vue-tsc` ships a release that supports TS 7's new export map — the two
+  need to be bumped together and re-verified together, not one at a time.
+  Left that PR open with this reasoning posted on it.
+- **GitHub Actions bumps (`actions/checkout`, `actions/cache`,
+  `actions/setup-node`, `actions/upload-artifact`) — v4→v6/v7 — merged
+  clean with zero workflow changes needed.** This repo's `.github/
+  workflows/*.yml` only uses these actions with basic, stable inputs
+  (checkout with no extra options, `cache`'s `path`/`key`, `setup-node`'s
+  `node-version`, `upload-artifact`'s default usage) — none of the
+  interface changes across those major version bumps touch what this repo
+  actually passes in. CI was already green on all four PRs before this
+  session even looked at them; merging didn't require re-running anything
+  beyond confirming that.
+- **`vue-router` 5.2.0 → 5.3.1 needed real scrutiny per the task brief
+  (it's the one actual runtime frontend dependency here), but the
+  scrutiny turned up very low actual exposure**: this codebase is Nuxt
+  4, and app code never imports `vue-router` directly — no
+  `router.beforeEach`, no direct `useRouter`/`useRoute` from
+  `'vue-router'`. Routing goes entirely through Nuxt's own wrappers
+  (`useRoute()`, `navigateTo()`, `definePageMeta()`), which insulate app
+  code from vue-router's own API surface. Combined with it being a minor
+  bump within the same major version, CI already green (typecheck +
+  Vitest + full Playwright E2E), and a from-scratch local `npm ci` +
+  `vitest run` (10/10 passed) + `vue-tsc --noEmit` (clean) repeated
+  against that exact branch to confirm the CI result independently — this
+  merged clean with no code changes needed. If a future vue-router bump
+  ever needs a *major*-version jump, this "Nuxt insulates us" reasoning
+  should be re-checked, not assumed to still hold — Nuxt's own internal
+  vue-router usage could still be affected even if app code isn't.
+- **`@types/node` bumps can silently drift ahead of the Node version CI
+  actually runs on — this repo already has that drift, pre-existing and
+  unrelated to any one bump.** `.github/workflows/ci.yml` pins
+  `node-version: '22'` but `frontend/package.json` requires
+  `@types/node@^26.x` (true both before and after the `26.3.0 → 26.5.1`
+  Dependabot bump reviewed this session). This didn't fail anything —
+  `@types/node` types are additive/superset in practice and typecheck was
+  green in CI and confirmed clean locally — but it's worth knowing this
+  mismatch exists so a future session doesn't waste time treating a real
+  Node-22-vs-26-API typecheck failure as some other kind of bug if one
+  ever surfaces from it. Not fixed this session (out of this task's
+  scope) — either pin `@types/node` to the `^22.x` line or bump the CI
+  runner's actual Node version to close the gap, whichever the project
+  actually wants going forward.
+- **This session's tools still have no GitHub Dependabot *security
+  alerts* API access** — same real, unchanged gap every prior session
+  documented for the version-bump PRs themselves (which ARE directly
+  visible as branches/PRs, and were the actual subject of this session).
+  Reviewing/merging the 7 open bump PRs is not the same claim as "no
+  unaddressed Dependabot alerts exist" — that second claim was not and
+  could not be verified this session.
