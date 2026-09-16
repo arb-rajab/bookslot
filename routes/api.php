@@ -8,6 +8,7 @@ use App\Http\Controllers\Api\ManageBookingController;
 use App\Http\Controllers\Api\MandateController;
 use App\Http\Controllers\Api\Owner\AppointmentController as OwnerAppointmentController;
 use App\Http\Controllers\Api\Owner\AvailabilityExceptionController as OwnerAvailabilityExceptionController;
+use App\Http\Controllers\Api\Owner\CustomerController as OwnerCustomerController;
 use App\Http\Controllers\Api\Owner\NotificationController as OwnerNotificationController;
 use App\Http\Controllers\Api\Owner\QueueHealthController as OwnerQueueHealthController;
 use App\Http\Controllers\Api\Owner\ServiceController as OwnerServiceController;
@@ -111,6 +112,15 @@ Route::prefix('owner')
         Route::get('notifications', [OwnerNotificationController::class, 'index']);
 
         Route::get('queue-health', [OwnerQueueHealthController::class, 'show']);
+
+        // FR-18/D-0059: neither action calls Stripe (D-0022: erasure never
+        // touches payment_mandates, the only Stripe-ID-bearing table a
+        // customer's data reaches; export is read-only) — plain
+        // `auth.tenant` is correct here, unlike refund/balance-charge/
+        // Connect, which all need `auth.tenant.external` specifically
+        // because they call Stripe mid-request.
+        Route::get('customers/{id}/export', [OwnerCustomerController::class, 'export']);
+        Route::post('customers/{id}/erasure', [OwnerCustomerController::class, 'erase']);
     });
 
 // D-0056 (docs/project-memory/09-decision-log.md, amends D-0027 to a second
