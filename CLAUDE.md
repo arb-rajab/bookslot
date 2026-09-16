@@ -586,3 +586,36 @@ of preference:
   `paid_manually`/`processing`, deliberately not `failed` — copying
   refund's "any non-refundable-shaped status blocks it" pattern verbatim
   would have been wrong here, not just inconsistent-looking.
+
+## Session 28 additions — the Stripe Connect onboarding-link endpoint; a `composer` scripts-vs-binary gotcha in this root sandbox
+
+- **`composer test:fast`/`composer analyse`/any other `composer <script>`
+  that wraps a vendor binary aborts outright when run as this sandbox's
+  root user, even after Session 20's `sudo -u postgres`-style workarounds
+  are irrelevant here** — the failure is `Aborting as no plugin should be
+  loaded if running as super user is not explicitly allowed`, which looks
+  like a broken install but isn't: it's Composer's own safety gate against
+  running as root, and it blocks the *script wrapper* specifically, not
+  the underlying tool. Calling the vendor binary directly
+  (`./vendor/bin/pest --exclude-group=queue-broker`,
+  `./vendor/bin/pint --test`) has never hit this and needs no workaround —
+  confirmed working fine all session. Only reach for
+  `COMPOSER_ALLOW_SUPERUSER=1 composer test:fast` (etc.) when you
+  specifically want to run the exact named `composer.json` script (e.g. to
+  double-check it matches what CI's own step invokes) rather than just the
+  test suite itself.
+- **This session's container was fresh in exactly the ways Sessions
+  21-27 already documented** (no `.env`, no Postgres roles/databases, no
+  RabbitMQ installed) — every documented step from those sections applied
+  unchanged and worked first try. Nothing new to add there; recorded here
+  only so a future session doesn't waste time re-verifying that the
+  existing instructions still hold — they do.
+- **`tenants` (the tenancy-boundary table, deliberately outside RLS —
+  `04-data-model.md`) already had both Connect-related columns
+  (`stripe_connect_account_id`, `stripe_onboarding_status`) since the
+  original Session ~8 migration set, long before any Connect code
+  existed.** Building the actual onboarding-link/status endpoints (D-0058)
+  needed zero new columns on that table — only a new supporting unique
+  index. Same lesson D-0056 already recorded for `refunds`/`payments`:
+  check the existing schema before assuming a new feature needs new
+  migrations.

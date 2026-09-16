@@ -12,6 +12,7 @@ use App\Http\Controllers\Api\Owner\NotificationController as OwnerNotificationCo
 use App\Http\Controllers\Api\Owner\QueueHealthController as OwnerQueueHealthController;
 use App\Http\Controllers\Api\Owner\ServiceController as OwnerServiceController;
 use App\Http\Controllers\Api\Owner\StaffController as OwnerStaffController;
+use App\Http\Controllers\Api\Owner\StripeConnectController as OwnerStripeConnectController;
 use App\Http\Controllers\Api\Owner\WorkingHourController as OwnerWorkingHourController;
 use App\Http\Controllers\Api\PaymentConfirmationController;
 use App\Http\Controllers\Api\ServiceController;
@@ -130,6 +131,17 @@ Route::middleware(['auth.tenant.external', 'role:owner'])
 // that call.
 Route::middleware(['auth.tenant.external', 'role:owner'])
     ->post('owner/appointments/{id}/balance/charge', [OwnerAppointmentController::class, 'chargeBalance']);
+
+// D-0058 (docs/project-memory/09-decision-log.md, amends D-0027 to a
+// fourth/fifth owner-facing route): same reasoning as refund/balance-charge
+// immediately above — both actions call Stripe (Connect account/Account
+// Link creation, and a live account-status read) and must not hold
+// `auth.tenant`'s whole-request transaction open across either call.
+Route::middleware(['auth.tenant.external', 'role:owner'])
+    ->post('owner/stripe/connect/onboarding-link', [OwnerStripeConnectController::class, 'onboardingLink']);
+
+Route::middleware(['auth.tenant.external', 'role:owner'])
+    ->get('owner/stripe/connect/status', [OwnerStripeConnectController::class, 'status']);
 
 Route::prefix('staff')
     ->middleware(['auth.tenant', 'role:staff'])

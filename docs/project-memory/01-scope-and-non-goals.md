@@ -158,11 +158,20 @@ migration, a route, or a stub controller behind it.
       off-session charge itself was never written," which Session 27
       closed — see the built-and-proven entry above.
 - [ ] **Post-appointment rebooking prompt** — zero code. Not started.
-- [ ] **Stripe Connect (Express) onboarding** for a business to receive
-      payouts — zero code. Every booking and payment built so far runs
-      against a single seeded demo tenant with no onboarding flow of its
-      own; there is no path today for a second, real business to connect a
-      Stripe account to this product at all.
+- [x] **Stripe Connect (Express) onboarding** for a business to receive
+      payouts — **built Session 28, D-0058**: account creation, hosted
+      Account Link generation/refresh, and a live status-check endpoint
+      (`05-api-contracts.md` endpoint 10), plus `account.updated`/
+      `account.application.deauthorized` webhook handling keeping
+      `tenants.stripe_onboarding_status` current. Backend-only — no
+      frontend settings page or Playwright coverage exists yet (same
+      "no frontend coverage needed for this session's scope" conclusion
+      D-0056/D-0057 already reached; `services.stripe
+      .connect_onboarding_redirect_url` points at a `/owner/settings/stripe`
+      frontend route that does not exist yet, a real named gap for a
+      future session). No account-replacement flow after a deauthorized
+      Connect account exists either — a separately-scoped, undesigned
+      feature.
 
 ### Permanently unverifiable by deliberate project-scope choice
 

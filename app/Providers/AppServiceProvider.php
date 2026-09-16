@@ -2,8 +2,11 @@
 
 namespace App\Providers;
 
+use App\Payments\ConnectOnboardingGateway;
+use App\Payments\FakeConnectOnboardingGateway;
 use App\Payments\FakePaymentIntentGateway;
 use App\Payments\PaymentIntentGateway;
+use App\Payments\StripeConnectOnboardingGateway;
 use App\Payments\StripePaymentIntentGateway;
 use App\Queue\RabbitMq\RabbitMqConnector;
 use Illuminate\Support\Facades\Log;
@@ -39,9 +42,11 @@ class AppServiceProvider extends ServiceProvider
 
         if ($looksReal) {
             $this->app->bind(PaymentIntentGateway::class, StripePaymentIntentGateway::class);
+            $this->app->bind(ConnectOnboardingGateway::class, StripeConnectOnboardingGateway::class);
         } else {
             $this->app->bind(PaymentIntentGateway::class, FakePaymentIntentGateway::class);
-            Log::warning('No real Stripe secret key configured (D-0036/D-0038) — PaymentIntentGateway is bound to the fake tier.');
+            $this->app->bind(ConnectOnboardingGateway::class, FakeConnectOnboardingGateway::class);
+            Log::warning('No real Stripe secret key configured (D-0036/D-0038) — PaymentIntentGateway/ConnectOnboardingGateway are bound to the fake tier.');
         }
     }
 

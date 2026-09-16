@@ -162,7 +162,8 @@ and rate-limit numbers are still future-session work (see Deferred below).
 | `POST /api/owner/customers/{id}/erasure` | FR-18 erasure request |
 | `GET /api/owner/customers/{id}/export` | FR-18 export |
 | `POST /api/owner/customers/{id}/re-invite` | FR-23/D-0014: manually re-invite a specific customer to book again — **defined Session 6**, see below |
-| `POST /api/owner/stripe/connect/onboarding-link` | Start/resume Stripe Connect Express onboarding |
+| `POST /api/owner/stripe/connect/onboarding-link` | Start/resume/refresh Stripe Connect Express onboarding — **built Session 28, D-0058** |
+| `GET /api/owner/stripe/connect/status` | Live Connect onboarding/charges-enabled status check — **built Session 28, D-0058** |
 
 ### Staff (authenticated, tenant-scoped, narrower than owner)
 
@@ -542,6 +543,50 @@ closing the gap this endpoint's original definition (Session 6) flagged but
 didn't fix. This endpoint's send is recorded with `purpose =
 'rebooking_invite'`.
 
+### 10. `POST /api/owner/stripe/connect/onboarding-link` / `GET /api/owner/stripe/connect/status` — built Session 28, D-0058
+
+**`POST .../onboarding-link` request:** `{}` — no body. Creates a Stripe
+Express connected account for the caller's own tenant if one doesn't exist
+yet (`tenants.stripe_connect_account_id` still null), then always issues a
+fresh, single-use Account Link — the same one call serves the "start,"
+"resume," and Stripe's own "refresh_url redirected me back here" cases, per
+D-0058. Safe to call again for an already-`complete` tenant (Stripe's
+hosted flow also serves updating previously-submitted details); does not
+recreate the account or touch its recorded status in that case.
+
+**`POST .../onboarding-link` response `200`:** `{ "url": "https://connect.stripe.com/...", "expires_at": 1234567890 }` —
+`url` is the Stripe-hosted onboarding page to redirect the owner to;
+`expires_at` is a Unix timestamp (Stripe's own convention), since Account
+Links are short-lived and single-use.
+
+**`GET .../status` request:** none. Live-reads the connected account's
+current state directly from Stripe (skipped entirely, returning
+`not_started` immediately with zero Stripe calls, if no account exists
+yet) — deliberately not just an echo of the last-known
+`tenants.stripe_onboarding_status`, since Stripe's own integration
+guidance is that a redirect back to `return_url` does not itself prove
+onboarding finished. Self-heals `tenants.stripe_onboarding_status` from
+the live result.
+
+**`GET .../status` response `200`:** `{ "status": "not_started" | "pending" | "complete" | "restricted", "charges_enabled": bool, "details_submitted": bool }`.
+`status` is classified: a Stripe-reported `requirements.disabled_reason`
+always wins as `restricted` (even if `charges_enabled` is still `true` —
+Stripe can flag an account mid-review without immediately disabling
+charges); else `charges_enabled` → `complete`; else → `pending`.
+
+**Errors (both endpoints):** `502` (`PAYMENT_PROVIDER_UNAVAILABLE`) if the
+Stripe call itself throws — a genuine provider failure, same convention as
+endpoints 5/6.
+
+Both endpoints run behind `auth.tenant.external` (not `auth.tenant`), same
+D-0027 reasoning as endpoints 5/6 — both call Stripe mid-request. Neither
+takes a resource id: the tenant acted on is always whichever one the
+caller's own session resolves to, never a route parameter. `account.updated`
+(already listed in the webhook table below) and
+`account.application.deauthorized` (added this session — see below) are
+the two Connect webhook events that asynchronously keep
+`tenants.stripe_onboarding_status` current between live status checks.
+
 ## Stripe webhooks consumed
 
 | Webhook | Mutates |
@@ -550,7 +595,8 @@ didn't fix. This endpoint's send is recorded with `purpose =
 | `payment_intent.payment_failed` | `payments.status → failed`; records `failure_code`. Applies to both `deposit` (J2's decline/retry path) and `balance` (J5's off-session decline, endpoint 6) payment types, by the same `stripe_payment_intent_id` lookup — idempotent against endpoint 6's synchronous failure response for the balance case, same reasoning as above (clarified Session 6) |
 | `charge.refunded` | `refunds.status → succeeded`; `payments.status → refunded`/`partially_refunded` |
 | `charge.dispute.created` / `charge.dispute.closed` | `booking_events` audit entry (dispute evidence per 06); does not itself mutate appointment/payment status — a dispute is tracked, not auto-resolved |
-| `account.updated` (Connect) | `tenants.stripe_onboarding_status` |
+| `account.updated` (Connect) | `tenants.stripe_onboarding_status` — **built Session 28, D-0058**; classified via `ConnectAccountStatus::toOnboardingStatus()`, the same method endpoint 10's live status check uses |
+| `account.application.deauthorized` (Connect) | `tenants.stripe_onboarding_status → restricted` — **built Session 28, D-0058**; resolved via `tenants.stripe_connect_account_id`, not `metadata.tenant_id` (this event's `data.object` is a Stripe Application, which carries no tenant metadata) |
 
 Every webhook handler: (1) verifies `Stripe-Signature`, (2) inserts into
 `stripe_webhook_events` with `ON CONFLICT (stripe_event_id) DO NOTHING` and

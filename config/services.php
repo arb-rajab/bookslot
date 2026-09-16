@@ -38,10 +38,23 @@ return [
     // D-0006/D-0030. STRIPE_APPLICATION_FEE_BPS is the platform's cut of
     // each deposit, taken via application_fee_amount on the destination
     // charge — a config value, not a fabricated business number.
+    // D-0058: connect_country is a single configured value, not a
+    // per-tenant setting — 03-architecture.md's own justification for
+    // Stripe Connect Express is explicitly single-country at MVP.
+    // connect_onboarding_redirect_url is one base URL for both Stripe
+    // redirect targets (return_url/refresh_url); Owner\StripeConnectController
+    // appends `?onboarding=return`/`?onboarding=refresh` itself so a future
+    // frontend page can tell the two apart, without needing two separately
+    // configured URLs that could drift onto different frontend deployments.
     'stripe' => [
         'secret_key' => env('STRIPE_SECRET_KEY'),
         'webhook_secret' => env('STRIPE_WEBHOOK_SECRET'),
         'application_fee_bps' => (int) env('STRIPE_APPLICATION_FEE_BPS', 0),
+        'connect_country' => env('STRIPE_CONNECT_COUNTRY', 'US'),
+        'connect_onboarding_redirect_url' => env(
+            'STRIPE_CONNECT_ONBOARDING_REDIRECT_URL',
+            rtrim(explode(',', env('FRONTEND_URLS', 'http://localhost:3000'))[0], '/').'/owner/settings/stripe'
+        ),
     ],
 
     // D-0051: the RabbitMQ management plugin's HTTP API (already enabled in
