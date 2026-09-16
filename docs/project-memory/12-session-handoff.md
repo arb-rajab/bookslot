@@ -1781,3 +1781,111 @@ cancel button, services/availability form submission); the
 `05-api-contracts.md`'s other still-unbuilt rows (refund, off-session
 balance charge, customer erasure/export, re-invite, Stripe Connect
 onboarding-link).
+
+## Amendment (Session 22, 2026-09-16) — D-0048's `charge.dispute.created` tenant-resolution gap closed (D-0053)
+
+**Work order, verified against real state before writing anything:** the
+work order named this session "Session 21" and described the dispute gap
+directly from D-0048's own text; both were confirmed true by reading this
+file's actual latest amendment (Session 21, immediately above) and
+`09-decision-log.md`'s D-0048 entry directly, rather than trusted from the
+work order's framing — no staleness found this time, the repo's own
+account of itself was accurate.
+
+**What was built, in one sentence:** `charge.dispute.created`/`.closed`
+webhooks now resolve their tenant via the Dispute object's own
+`payment_intent` field (the same `payments.stripe_payment_intent_id`
+lookup every other webhook handler already uses) through a new
+`ResolveStripeDisputeTenantJob` that scans tenants one `TenantContext::run()`
+at a time — reusing `ReconcilePaymentMandatesCommand`'s (D-0037) existing
+per-tenant-scan pattern for "find something without yet knowing its
+tenant," never a `BYPASSRLS` credential — and then, once resolved, records
+one `booking_events` audit entry via the pre-existing `ProcessStripeWebhookJob`,
+matching `05-api-contracts.md`'s own already-written target ("tracked, not
+auto-resolved"). Full reasoning, the object-graph trace, and the RLS
+chicken-and-egg problem this solves: D-0053 (`09-decision-log.md`).
+
+**J4/D-0036 boundaries, checked explicitly per the work order's own
+instruction, both untouched:** `handleChargeDispute()` mutates only
+`booking_events` — never `appointments.status`, never `payments.status` —
+so nothing here infers or acts on a no-show (J4). No Stripe credential,
+live or test, was read, written, or touched; D-0036's permanent
+test-mode-only posture is unchanged, and every new test signs its own
+fixture payload locally exactly like every existing webhook test already
+does.
+
+**Tests:** 4 new Pest cases in the existing
+`tests/Feature/Api/StripeWebhookControllerTest.php` (correct resolution +
+audit entry for both `dispute.created`/`dispute.closed`, run across two
+real tenants so the per-tenant scan is proven to touch only the correct
+one; an orphaned/edge-case `payment_intent` matching no payment in any
+tenant, with a real unrelated tenant/payment present so the scan has
+something to correctly search past; a dispute payload carrying no
+`payment_intent` at all). The pre-existing "no resolvable tenant_id" test
+was retargeted to `charge.refunded` (a real, still-genuinely-unhandled
+event type) so it keeps proving the *other* fail-closed branch rather than
+being silently invalidated by this session's fix. Full fast gate:
+146 passed, 0 failed (142 pre-existing + 4 new; the `queue-broker` group's
+3 RabbitMQ-integration tests are excluded from `test:fast` by design and
+were separately confirmed passing once this session's own fresh container
+had a real local RabbitMQ broker installed and its `bookslot`/
+`bookslot_local_only` user created — see this file's Session 20/21
+amendments for why that setup step isn't optional even when the change
+under test doesn't itself touch the queue). `./vendor/bin/pint --test`
+clean. `phpstan`/`larastan` could not be run locally (composer's
+`api.github.com` rate limiting blocks its phar-only package even with
+`--prefer-source` — a known, documented limitation, see this file's
+Composer section below and the repo root `CLAUDE.md`); real CI
+(`.github/workflows/ci.yml`) has normal GitHub access and runs it.
+
+**A fresh container, confirmed genuinely fresh this session too:** neither
+Postgres roles/databases nor RabbitMQ existed at session start — the exact
+state Session 21's own amendment already found and documented (not a
+regression, a real property of this remote sandbox never persisting
+between sessions). Recreated exactly per this file's Session 21 amendment
+and the repo root `CLAUDE.md`'s own instructions: `bookslot_migrator`/
+`bookslot_app` roles, both `bookslot`/`bookslot_test` databases, base-table
+grants on both, `rabbitmq-server` installed + started + its `bookslot`
+user created. No deviation found worth amending those instructions over.
+
+**Docs touched this session:** `09-decision-log.md` (D-0053),
+`01-scope-and-non-goals.md` (the Session 19 checklist caveat updated to
+say the gap is closed), `07-testing-strategy.md` (the Disputes bullet
+updated with what's now actually built and tested), this file, and the
+repository root `CLAUDE.md`.
+Backend: `app/Jobs/ResolveStripeDisputeTenantJob.php` (new),
+`app/Jobs/ProcessStripeWebhookJob.php` (new `handleChargeDispute()`
+branch), `app/Http/Controllers/Api/StripeWebhookController.php` (dispatches
+the new job instead of giving up for dispute event types),
+`tests/Feature/Api/StripeWebhookControllerTest.php`.
+
+**Dependabot/vulnerability check, done and reported precisely (per this
+session's own standing instruction to never silently claim "none found"
+without genuinely checking):** this session's tools include no GitHub
+Dependabot-alerts API access — the same real limitation Session 21's
+amendment already found and documented, re-verified this session rather
+than assumed still true. What was actually run: `composer update
+--prefer-source` (this session's own fresh install, `larastan/larastan`
+temporarily removed per this file's Composer section — restored before
+committing) reported "No security vulnerability advisories found." No
+`npm install` was run this session (no frontend change), so no fresh `npm
+audit` signal exists from this session specifically — Session 21's own
+"found 0 vulnerabilities" from its `npm install` is the most recent real
+signal for the frontend dependency tree, unchanged by this session since
+`frontend/package.json`/`package-lock.json` were not touched. Neither
+substitute is a Dependabot-alert enumeration; the same real, named gap
+Session 21 already stated applies unchanged here.
+
+**Next recommended session:** unchanged in substance from Session 21's own
+list, minus the item this session closed. R-01 (no real pilot) remains the
+standing top risk. If building continues absent a pilot: the
+`bookslot-mobile` cross-repo field-shape verification (still unperformed,
+out of this repo's own access); R-08's remaining owner-side click gaps
+(mark-attended, no-show, the owner's own cancel button, services/
+availability form submission) — this session's own work order named R-08
+as a candidate follow-on but explicitly only if D-0048 closed first *and*
+time/scope allowed; it was not picked up this session, kept genuinely
+separate rather than started and left half-finished; and
+`05-api-contracts.md`'s other still-unbuilt rows (refund, off-session
+balance charge, customer erasure/export, re-invite, Stripe Connect
+onboarding-link).

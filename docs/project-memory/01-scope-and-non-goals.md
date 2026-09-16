@@ -77,11 +77,16 @@ test that fails if it regresses — not merely coded and assumed correct.
       Stripe event id, `payment_intent.succeeded`/`payment_intent.payment_failed`
       handled idempotently (late-arrival and duplicate-delivery cases both
       tested), via a real message-queue job (`ProcessStripeWebhookJob`) on
-      the new RabbitMQ broker (D-0047). *Caveat: `charge.dispute.created`
-      is recorded but not processed — no per-tenant handling exists for it
-      yet (its payload carries no resolvable tenant_id); D-0036's real-
-      Stripe-network limitation is unchanged — every test here signs its
-      own fixture payload locally, never a live Stripe delivery.*
+      the new RabbitMQ broker (D-0047). *Session 22 (D-0053): the
+      `charge.dispute.created`/`charge.dispute.closed` tenant-resolution gap
+      this caveat used to describe is closed — `ResolveStripeDisputeTenantJob`
+      resolves the tenant from the Dispute's own `payment_intent` field
+      (the same `payments.stripe_payment_intent_id` lookup every other
+      handler here already uses), and `ProcessStripeWebhookJob` now records
+      a `booking_events` audit entry for it, per `05`'s own pre-existing
+      "tracked, not auto-resolved" target. D-0036's real-Stripe-network
+      limitation is unchanged — every test here, dispute cases included,
+      signs its own fixture payload locally, never a live Stripe delivery.*
 - [x] **Hold-window expiry enforcement (FR-05)** — Session 19, D-0049:
       `ReleaseExpiredPendingBookingJob`, dispatched with a real delay (the
       new RabbitMQ broker's TTL+dead-letter-exchange mechanism, D-0047) at
