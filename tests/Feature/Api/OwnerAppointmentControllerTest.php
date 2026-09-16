@@ -598,6 +598,367 @@ test('a refund is still allowed on a confirmed (not cancelled) appointment — J
     });
 });
 
+// D-0057: POST /api/owner/appointments/{id}/balance/charge (05-api-
+// contracts.md endpoint 6, J5). Same discipline as the refund suite above
+// — FakePaymentIntentGateway is bound file-wide (see this file's top
+// beforeEach), and every test here constructs its own configured instance
+// via app()->bind() when it needs a specific chargeOffSession() outcome.
+test('an owner charges the balance on a completed appointment, creating a succeeded balance payment and a booking_events row', function () {
+    [$tenant] = ownerAndTenant();
+    $appointment = BookingFixture::appointmentFor($tenant, ['status' => 'completed']);
+    BookingFixture::depositPaymentFor(
+        $tenant,
+        $appointment,
+        ['status' => 'succeeded', 'amount' => 2000],
+        ['balance_amount_disclosed' => 8000, 'stripe_payment_method_id' => 'pm_fake_saved_card'],
+    );
+
+    app()->bind(PaymentIntentGateway::class, fn () => new FakePaymentIntentGateway(
+        chargeOffSessionStatus: 'succeeded',
+        chargeOffSessionPaymentIntentId: 'pi_fake_balance_charge_1',
+    ));
+
+    $xsrf = loginAsOwner($tenant);
+
+    $response = postJson("/api/owner/appointments/{$appointment->id}/balance/charge", [], [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+
+    $response->assertOk();
+    $response->assertJson(['status' => 'succeeded']);
+    expect($response->json('payment_id'))->not->toBeNull();
+
+    TenantContext::run($tenant->id, function () use ($appointment, $response) {
+        $payment = Payment::find($response->json('payment_id'));
+        expect($payment)->not->toBeNull();
+        expect($payment->appointment_id)->toBe($appointment->id);
+        expect($payment->type)->toBe('balance');
+        expect($payment->status)->toBe('succeeded');
+        expect($payment->amount)->toBe(8000);
+        expect($payment->stripe_payment_intent_id)->toBe('pi_fake_balance_charge_1');
+
+        $event = BookingEvent::query()->where('appointment_id', $appointment->id)->where('event_type', 'balance_charge_succeeded')->first();
+        expect($event)->not->toBeNull();
+        expect($event->actor_type)->toBe('owner');
+        expect($event->metadata['payment_id'])->toBe($payment->id);
+        expect($event->metadata['amount'])->toBe(8000);
+    });
+});
+
+test('a card-declined off-session charge returns 200 with a failed status and fallback_action, and records a failed payment + booking_events row', function () {
+    [$tenant] = ownerAndTenant();
+    $appointment = BookingFixture::appointmentFor($tenant, ['status' => 'completed']);
+    BookingFixture::depositPaymentFor(
+        $tenant,
+        $appointment,
+        ['status' => 'succeeded', 'amount' => 2000],
+        ['balance_amount_disclosed' => 8000, 'stripe_payment_method_id' => 'pm_fake_saved_card'],
+    );
+
+    app()->bind(PaymentIntentGateway::class, fn () => new FakePaymentIntentGateway(
+        chargeOffSessionStatus: 'failed',
+        chargeOffSessionFailureCode: 'card_declined',
+        chargeOffSessionPaymentIntentId: 'pi_fake_balance_declined',
+    ));
+
+    $xsrf = loginAsOwner($tenant);
+
+    $response = postJson("/api/owner/appointments/{$appointment->id}/balance/charge", [], [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+
+    $response->assertOk();
+    $response->assertJson([
+        'status' => 'failed',
+        'failure_code' => 'card_declined',
+        'fallback_action' => 'mark_paid_manually',
+    ]);
+
+    TenantContext::run($tenant->id, function () use ($appointment) {
+        $payment = Payment::query()->where('appointment_id', $appointment->id)->where('type', 'balance')->first();
+        expect($payment)->not->toBeNull();
+        expect($payment->status)->toBe('failed');
+        expect($payment->failure_code)->toBe('card_declined');
+
+        $event = BookingEvent::query()->where('appointment_id', $appointment->id)->where('event_type', 'balance_charge_failed')->first();
+        expect($event)->not->toBeNull();
+        expect($event->metadata['failure_code'])->toBe('card_declined');
+    });
+});
+
+test('an authentication-required off-session charge (SCA, no cardholder present) returns 200 with a failed status and fallback_action', function () {
+    [$tenant] = ownerAndTenant();
+    $appointment = BookingFixture::appointmentFor($tenant, ['status' => 'completed']);
+    BookingFixture::depositPaymentFor(
+        $tenant,
+        $appointment,
+        ['status' => 'succeeded', 'amount' => 2000],
+        ['balance_amount_disclosed' => 8000, 'stripe_payment_method_id' => 'pm_fake_saved_card'],
+    );
+
+    app()->bind(PaymentIntentGateway::class, fn () => new FakePaymentIntentGateway(
+        chargeOffSessionStatus: 'failed',
+        chargeOffSessionFailureCode: 'authentication_required',
+        chargeOffSessionPaymentIntentId: 'pi_fake_balance_auth_required',
+    ));
+
+    $xsrf = loginAsOwner($tenant);
+
+    $response = postJson("/api/owner/appointments/{$appointment->id}/balance/charge", [], [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+
+    $response->assertOk();
+    $response->assertJson([
+        'status' => 'failed',
+        'failure_code' => 'authentication_required',
+        'fallback_action' => 'mark_paid_manually',
+    ]);
+
+    TenantContext::run($tenant->id, function () use ($appointment) {
+        $payment = Payment::query()->where('appointment_id', $appointment->id)->where('type', 'balance')->first();
+        expect($payment->status)->toBe('failed');
+        expect($payment->failure_code)->toBe('authentication_required');
+    });
+});
+
+test('a previously card-declined balance charge can be retried and succeed — failed is not a terminal state for a balance payment', function () {
+    [$tenant] = ownerAndTenant();
+    $appointment = BookingFixture::appointmentFor($tenant, ['status' => 'completed']);
+    BookingFixture::depositPaymentFor(
+        $tenant,
+        $appointment,
+        ['status' => 'succeeded', 'amount' => 2000],
+        ['balance_amount_disclosed' => 8000, 'stripe_payment_method_id' => 'pm_fake_saved_card'],
+    );
+    TenantContext::run($tenant->id, fn () => Payment::factory()->create([
+        'tenant_id' => $tenant->id,
+        'appointment_id' => $appointment->id,
+        'type' => 'balance',
+        'status' => 'failed',
+        'failure_code' => 'card_declined',
+        'amount' => 8000,
+    ]));
+
+    app()->bind(PaymentIntentGateway::class, fn () => new FakePaymentIntentGateway(chargeOffSessionStatus: 'succeeded'));
+
+    $xsrf = loginAsOwner($tenant);
+
+    $response = postJson("/api/owner/appointments/{$appointment->id}/balance/charge", [], [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+
+    $response->assertOk();
+    $response->assertJson(['status' => 'succeeded']);
+});
+
+test('a genuine Stripe-provider failure (not a decline) during the balance charge is mapped to 502, not silently treated as a decline', function () {
+    [$tenant] = ownerAndTenant();
+    $appointment = BookingFixture::appointmentFor($tenant, ['status' => 'completed']);
+    BookingFixture::depositPaymentFor(
+        $tenant,
+        $appointment,
+        ['status' => 'succeeded', 'amount' => 2000],
+        ['balance_amount_disclosed' => 8000, 'stripe_payment_method_id' => 'pm_fake_saved_card'],
+    );
+
+    app()->bind(PaymentIntentGateway::class, fn () => new FakePaymentIntentGateway(shouldThrowOnChargeOffSession: true));
+
+    $xsrf = loginAsOwner($tenant);
+
+    $response = postJson("/api/owner/appointments/{$appointment->id}/balance/charge", [], [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+
+    $response->assertStatus(502);
+    $response->assertJson(['error' => 'PAYMENT_PROVIDER_UNAVAILABLE']);
+
+    TenantContext::run($tenant->id, function () use ($appointment) {
+        expect(Payment::query()->where('appointment_id', $appointment->id)->where('type', 'balance')->count())->toBe(0);
+    });
+});
+
+test('charging the balance on a still-confirmed (not yet completed) appointment is rejected as 409 — J4 forbids a balance charge on anything but attended', function () {
+    [$tenant] = ownerAndTenant();
+    $appointment = BookingFixture::appointmentFor($tenant, ['status' => 'confirmed']);
+    BookingFixture::depositPaymentFor(
+        $tenant,
+        $appointment,
+        ['status' => 'succeeded', 'amount' => 2000],
+        ['balance_amount_disclosed' => 8000, 'stripe_payment_method_id' => 'pm_fake_saved_card'],
+    );
+
+    $xsrf = loginAsOwner($tenant);
+
+    $response = postJson("/api/owner/appointments/{$appointment->id}/balance/charge", [], [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+
+    $response->assertStatus(409);
+    $response->assertJson(['error' => 'INVALID_STATUS_TRANSITION']);
+});
+
+test('charging the balance on a no_show appointment is rejected — J4: no balance charge is ever attempted for a no-show', function () {
+    [$tenant] = ownerAndTenant();
+    $appointment = BookingFixture::appointmentFor($tenant, ['status' => 'no_show']);
+    BookingFixture::depositPaymentFor(
+        $tenant,
+        $appointment,
+        ['status' => 'succeeded', 'amount' => 2000],
+        ['balance_amount_disclosed' => 8000, 'stripe_payment_method_id' => 'pm_fake_saved_card'],
+    );
+
+    $xsrf = loginAsOwner($tenant);
+
+    $response = postJson("/api/owner/appointments/{$appointment->id}/balance/charge", [], [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+
+    $response->assertStatus(409);
+    $response->assertJson(['error' => 'INVALID_STATUS_TRANSITION']);
+});
+
+test('charging the balance when the deposit was never captured is rejected as 409', function () {
+    [$tenant] = ownerAndTenant();
+    $appointment = BookingFixture::appointmentFor($tenant, ['status' => 'completed']);
+    BookingFixture::depositPaymentFor($tenant, $appointment, ['status' => 'failed']);
+
+    $xsrf = loginAsOwner($tenant);
+
+    $response = postJson("/api/owner/appointments/{$appointment->id}/balance/charge", [], [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+
+    $response->assertStatus(409);
+    $response->assertJson(['error' => 'DEPOSIT_NOT_CAPTURED']);
+});
+
+test('charging an already-settled balance a second time is rejected as 409, no second Stripe call attempted', function () {
+    [$tenant] = ownerAndTenant();
+    $appointment = BookingFixture::appointmentFor($tenant, ['status' => 'completed']);
+    BookingFixture::depositPaymentFor(
+        $tenant,
+        $appointment,
+        ['status' => 'succeeded', 'amount' => 2000],
+        ['balance_amount_disclosed' => 8000, 'stripe_payment_method_id' => 'pm_fake_saved_card'],
+    );
+    TenantContext::run($tenant->id, fn () => Payment::factory()->create([
+        'tenant_id' => $tenant->id,
+        'appointment_id' => $appointment->id,
+        'type' => 'balance',
+        'status' => 'succeeded',
+        'amount' => 8000,
+    ]));
+
+    $gateway = new FakePaymentIntentGateway;
+    app()->bind(PaymentIntentGateway::class, fn () => $gateway);
+
+    $xsrf = loginAsOwner($tenant);
+
+    $response = postJson("/api/owner/appointments/{$appointment->id}/balance/charge", [], [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+
+    $response->assertStatus(409);
+    $response->assertJson(['error' => 'BALANCE_ALREADY_SETTLED']);
+    expect($gateway->chargeOffSessionCallCount())->toBe(0);
+});
+
+test('charging the balance when no payment method was ever saved (R-07\'s backfill gap) is rejected as 409, not attempted against Stripe', function () {
+    [$tenant] = ownerAndTenant();
+    $appointment = BookingFixture::appointmentFor($tenant, ['status' => 'completed']);
+    BookingFixture::depositPaymentFor(
+        $tenant,
+        $appointment,
+        ['status' => 'succeeded', 'amount' => 2000],
+        ['balance_amount_disclosed' => 8000, 'stripe_payment_method_id' => null],
+    );
+
+    $gateway = new FakePaymentIntentGateway;
+    app()->bind(PaymentIntentGateway::class, fn () => $gateway);
+
+    $xsrf = loginAsOwner($tenant);
+
+    $response = postJson("/api/owner/appointments/{$appointment->id}/balance/charge", [], [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+
+    $response->assertStatus(409);
+    $response->assertJson(['error' => 'PAYMENT_METHOD_NOT_AVAILABLE']);
+    expect($gateway->chargeOffSessionCallCount())->toBe(0);
+});
+
+test('an owner cannot charge the balance on another tenant\'s appointment, gets a plain 404 — cross-tenant financial-action isolation, foreign state untouched', function () {
+    [$tenant] = ownerAndTenant();
+    $otherTenant = Tenant::factory()->create();
+    $foreignAppointment = BookingFixture::appointmentFor($otherTenant, ['status' => 'completed']);
+    BookingFixture::depositPaymentFor(
+        $otherTenant,
+        $foreignAppointment,
+        ['status' => 'succeeded', 'amount' => 2000],
+        ['balance_amount_disclosed' => 8000, 'stripe_payment_method_id' => 'pm_fake_saved_card'],
+    );
+
+    $gateway = new FakePaymentIntentGateway;
+    app()->bind(PaymentIntentGateway::class, fn () => $gateway);
+
+    $xsrf = loginAsOwner($tenant);
+
+    $response = postJson("/api/owner/appointments/{$foreignAppointment->id}/balance/charge", [], [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+
+    $response->assertStatus(404);
+    $response->assertJson(['error' => 'NOT_FOUND']);
+    expect($gateway->chargeOffSessionCallCount())->toBe(0);
+
+    // Not just that this request failed — the other tenant's own payment
+    // state must be completely unaffected, proving RLS never let this
+    // request touch the foreign row at all.
+    TenantContext::run($otherTenant->id, function () use ($foreignAppointment) {
+        expect(Payment::query()->where('appointment_id', $foreignAppointment->id)->where('type', 'balance')->count())->toBe(0);
+        expect(BookingEvent::query()->where('appointment_id', $foreignAppointment->id)->whereIn('event_type', ['balance_charge_succeeded', 'balance_charge_failed'])->count())->toBe(0);
+    });
+});
+
+test('a staff member cannot call the owner balance-charge endpoint', function () {
+    $tenant = Tenant::factory()->create();
+
+    TenantContext::run($tenant->id, function () use ($tenant) {
+        User::factory()->create([
+            'tenant_id' => $tenant->id,
+            'role' => 'staff',
+            'email' => 'staff-balance@example.test',
+            'password_hash' => Hash::make('correct-password'),
+        ]);
+    });
+
+    $appointment = BookingFixture::appointmentFor($tenant, ['status' => 'completed']);
+    BookingFixture::depositPaymentFor(
+        $tenant,
+        $appointment,
+        ['status' => 'succeeded', 'amount' => 2000],
+        ['balance_amount_disclosed' => 8000, 'stripe_payment_method_id' => 'pm_fake_saved_card'],
+    );
+
+    disableConsoleCsrfBypass();
+    [$xsrf, $login] = loginAndCaptureXsrf("/api/tenants/{$tenant->slug}/login", [
+        'email' => 'staff-balance@example.test',
+        'password' => 'correct-password',
+    ]);
+    $login->assertOk();
+
+    $response = postJson("/api/owner/appointments/{$appointment->id}/balance/charge", [], [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+
+    $response->assertStatus(403);
+});
+
+test('an unauthenticated request to the balance-charge endpoint is rejected', function () {
+    postJson('/api/owner/appointments/some-id/balance/charge')->assertStatus(401);
+});
+
 test('a cancelled appointment\'s slot can be rebooked — the exclusion constraint\'s partial WHERE excludes cancelled', function () {
     [$tenant] = ownerAndTenant();
     $appointment = BookingFixture::appointmentFor($tenant, ['status' => 'confirmed']);

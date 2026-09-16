@@ -81,6 +81,24 @@ test that fails if it regresses — not merely coded and assumed correct.
       frontend page or Playwright spec names a refund button as in scope;
       the existing appointment-detail page's cancel-button copy explicitly
       still calls a deposit refund "a separate, not-yet-built capability."
+- [x] **Owner-initiated off-session balance charge** (J5, `05`'s endpoint 6,
+      the item named unbuilt below through Session 26) — `POST /api/owner/
+      appointments/{id}/balance/charge` (D-0057, Session 27): a real
+      off-session Stripe charge (test-mode only, D-0036) against the card
+      saved at deposit time (`payment_mandates.stripe_payment_method_id`,
+      no Stripe Customer object involved, same as the deposit side),
+      gated on `appointments.status === 'completed'` plus a captured
+      deposit, charging the mandate's own disclosed balance figure rather
+      than a live recomputation, a `booking_events` row on every attempt
+      (success or failure), and explicit handling of the two off-session-
+      specific failure modes (card declined, SCA authentication required)
+      as expected `200` outcomes per `05`'s contract, not exceptions.
+      Owner-initiated only, via this dedicated route — the "studio policy
+      is auto-charge" trigger J5's prose describes was never built (no
+      such policy column exists on `tenants`/`services`), matching D-0056's
+      own reasoning for why refund is explicit-owner-action-only too. No
+      owner-admin UI trigger built this session, same scoping as D-0056's
+      refund — `05-api-contracts.md` documents only the API contract.
 - [x] **The reconciliation safeguard for R-07** — `mandates:reconcile-backfill`
       (D-0037), scheduled hourly, flags any `payment_mandates` row whose
       `stripe_payment_method_id` sits `NULL` past a reasoned 30-minute grace
@@ -130,12 +148,15 @@ test that fails if it regresses — not merely coded and assumed correct.
 No partial credit is claimed for any of these. None has so much as a
 migration, a route, or a stub controller behind it.
 
-- [ ] **Automatic balance charging** (the off-session charge half of J5) —
-      the *mandate evidence* that would back such a charge is built and
-      tested (D-0010, `payment_mandates`), but the charge itself — actually
-      calling Stripe off-session for the remaining balance — has never been
-      written. "Attended → applied to balance" today means only a status
-      write (D-0042); no money moves.
+- [ ] **Studio-configured "auto-charge" balance policy** — J5's prose
+      ("if the studio's policy is auto-charge") describes a per-studio
+      toggle that would trigger `05` endpoint 6 automatically on
+      `completed`, without an owner click. No such policy column exists on
+      `tenants`/`services`, and Session 27 (D-0057) deliberately did not
+      invent one — the endpoint it built is explicit-owner-action-only,
+      same standing pattern as refund (D-0056). Distinct from "the
+      off-session charge itself was never written," which Session 27
+      closed — see the built-and-proven entry above.
 - [ ] **Post-appointment rebooking prompt** — zero code. Not started.
 - [ ] **Stripe Connect (Express) onboarding** for a business to receive
       payouts — zero code. Every booking and payment built so far runs

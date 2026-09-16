@@ -498,3 +498,91 @@ of preference:
   existing `TenantContext::run()` pattern. Don't assume a new
   money-movement table needs new RLS wiring without checking
   `config/tenancy.php` first; it may already be covered.
+
+## Session 27 additions — the off-session balance-charge endpoint; `composer install --prefer-source`'s real failure point is `phpstan/phpstan` specifically, not whatever package composer's own progress output happens to be printing last
+
+- **When `composer install --prefer-source` fails with "Could not
+  authenticate against github.com," don't assume the package composer's
+  progress bar was printing when it died is the actual culprit — re-run
+  with `-vvv` and read the LAST HTTP line before the exception, not the
+  last "Syncing ... into cache" line.** This session's plain (non-`-vvv`)
+  output made it look like `stripe/stripe-php` (the very last package
+  listed before the crash) was the one failing to authenticate — a
+  reasonable but wrong first guess, since this task's own scope is
+  entirely Stripe-shaped and a Stripe-specific git-auth wall would have
+  been a very different, harder problem. Re-running with `-vvv` showed the
+  real failing call was `[403] https://api.github.com/repos/phpstan/
+  phpstan/zipball/...` — `phpstan/phpstan` (this repo's already-documented
+  no-`source`-in-Packagist-metadata gap, via `larastan/larastan`), and
+  `stripe/stripe-php` itself had already cloned via git successfully
+  several lines earlier in the same output. The existing documented
+  workaround (temporarily remove `larastan/larastan` from `require-dev`,
+  `composer update --prefer-source`, then `git checkout --
+  composer.json composer.lock` before any commit) applied unchanged and
+  fixed it — no new workaround was needed, but the diagnosis step (`-vvv`,
+  reading the actual failing URL) is worth keeping in mind before spending
+  time on a wrong theory about which package is actually blocked.
+- **A fresh container this session had neither RabbitMQ installed at all
+  (not just stopped) nor any Postgres roles/databases** — consistent with
+  every prior session's own finding that the container is genuinely fresh
+  each time, not something to assume persisted from Session 26. All of
+  Session 21/22's documented steps (create `bookslot_migrator`/
+  `bookslot_app` roles, `createdb` both databases as the `postgres` OS
+  user via `sudo -u postgres`, the three `GRANT`/`ALTER DEFAULT
+  PRIVILEGES` statements against BOTH databases, `apt-get install
+  rabbitmq-server` + `service rabbitmq-server start` + `rabbitmqctl
+  add_user bookslot ...`) were needed from scratch again, in that order,
+  before `migrate:fresh --seed` or any Feature test could run.
+- **This codebase already had every piece of "off-session payment method"
+  plumbing J5 needs before this session — reusing it correctly meant
+  reading D-0006/D-0010/D-0031 closely, not building anything new.** The
+  deposit PaymentIntent (`StripePaymentIntentGateway::create()`, D-0006)
+  already sets `setup_future_usage: off_session`; `PaymentConfirmationController`
+  (D-0033) already backfills the resulting payment method's ID into
+  `payment_mandates.stripe_payment_method_id` (D-0031's nullable-with-
+  backfill column); and — the one genuine Stripe-API-mechanics question
+  worth resolving explicitly rather than assuming — neither `create()` nor
+  any table in `04-data-model.md` has ever involved a Stripe *Customer*
+  object (no `stripe_customer_id` column anywhere; `customers` is this
+  app's own unrelated table). Stripe's own documented pattern for
+  reusing a saved card without a Customer object (confirming a *new*
+  PaymentIntent directly against a previously-used `payment_method` ID via
+  `off_session: true, confirm: true`) matches this codebase's existing
+  design exactly — building the balance charge was "add one gateway method
+  that reuses the existing saved value," not "design new payment-method-
+  saving plumbing." If a future session is asked to build something that
+  looks like it needs a new saved-payment-method mechanism, check
+  `payment_mandates.stripe_payment_method_id` and D-0031 first — it may
+  already exist.
+- **Stripe's off-session confirm failures (decline, SCA-authentication-
+  required) surface as a thrown `Stripe\Exception\CardException`, not a
+  returned `requires_action` PaymentIntent status** — this is different
+  from the on-session confirm flow `PaymentIntentGateway::retrieve()`
+  already reads a status back from, and it's the reason
+  `chargeOffSession()` has a different contract from `create()`/`refund()`
+  on this codebase's own `PaymentIntentGateway` interface: it catches that
+  specific exception itself and reports the outcome via a returned value
+  object, rather than letting the caller's generic `catch (Throwable)`
+  turn every failure into a `502`. Never verified against a real Stripe
+  account (D-0036, permanent) — written to match Stripe's own published
+  API docs for this flow, and the fake-tier tests are the only thing that
+  actually exercises the branching. If a future session touches this
+  gateway method, keep the "decline/auth-required is an expected
+  `OffSessionChargeResult`, only a genuine provider failure still throws"
+  distinction — collapsing the two would either surface real declines to
+  the frontend as `502`s (wrong per `05-api-contracts.md`'s own documented
+  `200`-with-`failed`-status contract) or silently swallow a real outage
+  as if it were an ordinary decline.
+- **`payments.status`'s "terminal" states are not the same set for every
+  `payments.type`, and treating them as if they were is a real trap.** A
+  `deposit`-type payment's `refunded`/`partially_refunded` are terminal by
+  `04`'s own diagram (D-0056's refund is correctly one-shot). A
+  `balance`-type payment's `failed` is explicitly NOT terminal — J5's own
+  requirement text frames a decline as retriable ("the owner is shown a
+  clear 'collect in person' fallback action... rather than a silent
+  failure"), and nothing in `04`'s payment-state-machine diagram draws
+  `failed` as terminal for either payment type. This session's balance-
+  charge eligibility check only blocks a retry on `succeeded`/
+  `paid_manually`/`processing`, deliberately not `failed` — copying
+  refund's "any non-refundable-shaped status blocks it" pattern verbatim
+  would have been wrong here, not just inconsistent-looking.

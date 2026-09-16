@@ -409,7 +409,12 @@ like `BookingController`/`PaymentConfirmationController`, it calls Stripe
 mid-request and must not hold a database transaction open across that call
 (D-0027).
 
-### 6. `POST /api/owner/appointments/{id}/balance/charge`
+### 6. `POST /api/owner/appointments/{id}/balance/charge` — built Session 27, D-0057
+
+**Request:** no body — every value the charge needs (amount, saved payment
+method, currency, connected account) is read server-side from the
+appointment's own `payment_mandates`/`payments`/`tenants` rows, never
+supplied by the client.
 
 **Response `200` (success):** `{ "status": "succeeded", "payment_id": "…" }`.
 
@@ -425,7 +430,46 @@ Deliberately a `200` with a `failed` status, not a `4xx/5xx` — a declined
 off-session charge is an expected, handled business outcome (J5), not a
 malformed request or a server error. The response tells the frontend
 exactly which fallback UI to show (J6), rather than the frontend inferring
-it from an HTTP status code.
+it from an HTTP status code. `failure_code` is Stripe's own decline/error
+code (`card_declined`, `authentication_required`, etc.), same convention as
+`payments.failure_code` elsewhere.
+
+**Errors:** `404` if the appointment doesn't exist or belongs to another
+tenant (RLS-indistinguishable, same convention as endpoints 4/5); `409`
+(`INVALID_STATUS_TRANSITION`) if `appointments.status !== 'completed'` (J5
+point 1; J4 point 4 forbids a balance charge for a no-show, and
+`pending_payment`/`confirmed`/`cancelled` have nothing to charge yet or
+ever); `409` (`DEPOSIT_NOT_CAPTURED`) if the deposit `payments` row isn't
+`succeeded`; `409` (`BALANCE_ALREADY_SETTLED`) if a `balance` payment
+already exists with status `succeeded`, `paid_manually`, or `processing`
+(a prior `failed` balance payment does NOT block a retry — J5's own text
+treats a decline as retriable, not terminal); `409`
+(`PAYMENT_METHOD_NOT_AVAILABLE`) if `payment_mandates.
+stripe_payment_method_id` is still null (D-0031's backfill never ran for
+this booking — R-07); `409` (`NO_BALANCE_DUE`) if the disclosed balance is
+zero or less; `502` (`PAYMENT_PROVIDER_UNAVAILABLE`) if the Stripe call
+itself throws (a genuine provider failure, distinct from an ordinary
+decline — see D-0057).
+
+Owner-initiated only, via this dedicated action route — J5's "if the
+studio's policy is auto-charge" describes a studio-configurable trigger
+that was never built (neither `tenants` nor `services` has any such policy
+column in `04-data-model.md`); this endpoint is the explicit action a
+"charge balance" button calls, matching this codebase's standing
+explicit-owner-action pattern for anything touching money (D-0006, D-0042,
+D-0051, D-0056). The charge amount is `payment_mandates.
+balance_amount_disclosed` (the figure the customer actually consented to
+at booking time), not a live recomputation from the service's current
+price — see D-0057 for why. The payment method charged is
+`payment_mandates.stripe_payment_method_id`, the same card the deposit's
+`setup_future_usage: off_session` PaymentIntent already saved — no Stripe
+Customer object is created or required (D-0006 never created one on the
+deposit side either; see `StripePaymentIntentGateway::chargeOffSession()`).
+Records a `booking_events` row on every attempt, success or failure
+(`event_type: balance_charge_succeeded` / `balance_charge_failed`),
+`actor_type: owner` — the same audit-trail pattern D-0053/D-0056 use. Runs
+behind `auth.tenant.external` (not `auth.tenant`), same reasoning as
+endpoint 5 (calls Stripe mid-request, D-0027).
 
 ### 7. `POST /api/owner/staff/{id}/availability-exceptions`
 

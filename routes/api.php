@@ -123,6 +123,14 @@ Route::prefix('owner')
 Route::middleware(['auth.tenant.external', 'role:owner'])
     ->post('owner/appointments/{id}/refund', [OwnerAppointmentController::class, 'refund']);
 
+// D-0057 (docs/project-memory/09-decision-log.md, amends D-0027 to a third
+// owner-facing route): same reasoning as the refund route immediately
+// above — this endpoint calls Stripe (an off-session balance charge, J5)
+// and must not hold `auth.tenant`'s whole-request transaction open across
+// that call.
+Route::middleware(['auth.tenant.external', 'role:owner'])
+    ->post('owner/appointments/{id}/balance/charge', [OwnerAppointmentController::class, 'chargeBalance']);
+
 Route::prefix('staff')
     ->middleware(['auth.tenant', 'role:staff'])
     ->group(function () {
