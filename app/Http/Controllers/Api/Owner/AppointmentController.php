@@ -91,9 +91,29 @@ class AppointmentController extends Controller
             return response()->json(['error' => 'NOT_FOUND'], 404);
         }
 
+        return response()->json($this->presentDetail($appointment));
+    }
+
+    /**
+     * The full detail shape (frontend/app/types/owner.ts's
+     * OwnerAppointmentDetail) — shared by show() and cancel() so both ever
+     * only build it in one place. Found necessary this session (R-08): the
+     * frontend's appointment-detail page (frontend/app/pages/owner/
+     * appointments/[id].vue) assigns whatever `cancel()` returns straight
+     * onto `detail.value`, so a response missing `payments`/`reminders`/
+     * `events` doesn't just render a slightly incomplete page — the
+     * template's `detail.payments.length` (etc.) throws on `undefined` and
+     * crashes the whole page, silently, past the click that triggered it.
+     * No non-browser test could have caught this: every existing
+     * `cancel()` Feature test only asserted the JSON body's own fields, not
+     * how a real Vue template that had already rendered the fuller show()
+     * shape would react to a thinner one replacing it in place.
+     */
+    private function presentDetail(Appointment $appointment): array
+    {
         $payments = Payment::query()->where('appointment_id', $appointment->id)->get();
 
-        return response()->json([
+        return [
             ...$this->present($appointment),
             'customer_email' => $appointment->customer?->email,
             'customer_phone' => $appointment->customer?->phone,
@@ -118,7 +138,7 @@ class AppointmentController extends Controller
                 ->where('appointment_id', $appointment->id)
                 ->orderBy('created_at')
                 ->get(['id', 'actor_type', 'event_type', 'from_status', 'to_status', 'created_at']),
-        ]);
+        ];
     }
 
     /**
@@ -170,7 +190,7 @@ class AppointmentController extends Controller
             'metadata' => $reason !== null ? ['reason' => $reason] : null,
         ]);
 
-        return response()->json($this->present($appointment->fresh(['customer', 'service', 'staff'])));
+        return response()->json($this->presentDetail($appointment->fresh(['customer', 'service', 'staff'])));
     }
 
     public function updateStatus(Request $request, string $id): JsonResponse
