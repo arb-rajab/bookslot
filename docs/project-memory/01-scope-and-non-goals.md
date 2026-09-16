@@ -69,6 +69,18 @@ test that fails if it regresses — not merely coded and assumed correct.
       on the same real owner-facing dashboard page (D-0055, Session 25). A
       raw count only, reading the explicit-owner-action `no_show` status
       (J4), not FR-05's unrelated hold-window-expiry mechanism.
+- [x] **Owner-initiated refund** (FR-12, `05`'s endpoint 5, the piece
+      D-0042/D-0051 both explicitly left unbuilt) — `POST /api/owner/
+      appointments/{id}/refund` (D-0056, Session 26): full or partial
+      refund of an already-captured deposit, in test-mode Stripe only
+      (D-0036), independent of the appointment's own status (J8's dispute
+      path, not only J7's post-cancellation path), a one-shot action per
+      payment per `04`'s state machine, a `booking_events` audit row
+      (`refund_issued`). No owner-admin UI trigger built this session —
+      `05-api-contracts.md` documents only the API contract, and no
+      frontend page or Playwright spec names a refund button as in scope;
+      the existing appointment-detail page's cancel-button copy explicitly
+      still calls a deposit refund "a separate, not-yet-built capability."
 - [x] **The reconciliation safeguard for R-07** — `mandates:reconcile-backfill`
       (D-0037), scheduled hourly, flags any `payment_mandates` row whose
       `stripe_payment_method_id` sits `NULL` past a reasoned 30-minute grace

@@ -8,13 +8,26 @@ use App\Models\Refund;
 use App\Models\Staff;
 use App\Models\Tenant;
 use App\Models\User;
+use App\Payments\PaymentIntentGateway;
 use App\Tenancy\TenantContext;
 use Illuminate\Support\Facades\Hash;
 use Tests\Support\BookingFixture;
+use Tests\Support\FakePaymentIntentGateway;
 
 use function Pest\Laravel\getJson;
 use function Pest\Laravel\patchJson;
 use function Pest\Laravel\postJson;
+
+// D-0056: refund() is the one action on this controller that calls Stripe
+// — bound here, file-wide, same as BookingControllerTest/
+// PaymentConfirmationControllerTest, so it never depends on
+// AppServiceProvider's own runtime fallback logic (which would otherwise
+// try the real StripePaymentIntentGateway against .env.testing's
+// look-real-enough dummy key and fail every refund test with a spurious
+// 502).
+beforeEach(function () {
+    app()->bind(PaymentIntentGateway::class, fn () => new FakePaymentIntentGateway);
+});
 
 /**
  * GET/PATCH /api/owner/appointments... (05-api-contracts.md endpoint 4,
@@ -393,6 +406,196 @@ test('an owner cannot cancel another tenant\'s appointment, gets a plain 404', f
     ]);
 
     $response->assertStatus(404);
+});
+
+test('an owner issues a full refund on a captured deposit, creating a refunds row, updating payment status, and a booking_events row', function () {
+    [$tenant] = ownerAndTenant();
+    $appointment = BookingFixture::appointmentFor($tenant, ['status' => 'confirmed']);
+    $payment = BookingFixture::depositPaymentFor($tenant, $appointment, ['status' => 'succeeded', 'amount' => 5000]);
+
+    $xsrf = loginAsOwner($tenant);
+
+    $response = postJson("/api/owner/appointments/{$appointment->id}/refund", ['reason' => 'Studio closed for the day'], [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+
+    $response->assertOk();
+    $response->assertJson(['payment_status' => 'refunded']);
+    expect($response->json('refund.amount'))->toBe(5000);
+    expect($response->json('refund.status'))->toBe('succeeded');
+
+    TenantContext::run($tenant->id, function () use ($appointment, $payment) {
+        expect(Payment::find($payment->id)->status)->toBe('refunded');
+
+        $refund = Refund::query()->where('payment_id', $payment->id)->first();
+        expect($refund)->not->toBeNull();
+        expect($refund->amount)->toBe(5000);
+        expect($refund->reason)->toBe('Studio closed for the day');
+        expect($refund->stripe_refund_id)->not->toBeNull();
+
+        $event = BookingEvent::query()->where('appointment_id', $appointment->id)->where('event_type', 'refund_issued')->first();
+        expect($event)->not->toBeNull();
+        expect($event->actor_type)->toBe('owner');
+        expect($event->metadata['refund_id'])->toBe($refund->id);
+    });
+});
+
+test('an owner issues a partial refund, leaving the payment partially_refunded', function () {
+    [$tenant] = ownerAndTenant();
+    $appointment = BookingFixture::appointmentFor($tenant, ['status' => 'confirmed']);
+    $payment = BookingFixture::depositPaymentFor($tenant, $appointment, ['status' => 'succeeded', 'amount' => 5000]);
+
+    $xsrf = loginAsOwner($tenant);
+
+    $response = postJson("/api/owner/appointments/{$appointment->id}/refund", ['amount' => 2000], [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+
+    $response->assertOk();
+    $response->assertJson(['payment_status' => 'partially_refunded']);
+    expect($response->json('refund.amount'))->toBe(2000);
+
+    TenantContext::run($tenant->id, function () use ($payment) {
+        expect(Payment::find($payment->id)->status)->toBe('partially_refunded');
+    });
+});
+
+test('refunding an already partially-refunded deposit a second time is rejected as 409 — partially_refunded is terminal per 04\'s payment state machine, not incrementally toppable-up', function () {
+    [$tenant] = ownerAndTenant();
+    $appointment = BookingFixture::appointmentFor($tenant, ['status' => 'confirmed']);
+    BookingFixture::depositPaymentFor($tenant, $appointment, ['status' => 'partially_refunded', 'amount' => 5000]);
+
+    $xsrf = loginAsOwner($tenant);
+
+    $response = postJson("/api/owner/appointments/{$appointment->id}/refund", ['amount' => 1000], [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+
+    $response->assertStatus(409);
+    $response->assertJson(['error' => 'PAYMENT_NOT_REFUNDABLE']);
+});
+
+test('a refund request exceeding the remaining refundable balance is rejected as 422', function () {
+    [$tenant] = ownerAndTenant();
+    $appointment = BookingFixture::appointmentFor($tenant, ['status' => 'confirmed']);
+    BookingFixture::depositPaymentFor($tenant, $appointment, ['status' => 'succeeded', 'amount' => 5000]);
+
+    $xsrf = loginAsOwner($tenant);
+
+    $response = postJson("/api/owner/appointments/{$appointment->id}/refund", ['amount' => 5001], [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+
+    $response->assertStatus(422);
+    $response->assertJson(['error' => 'VALIDATION_FAILED']);
+});
+
+test('refunding a deposit that was never captured is rejected as 409, not reachable via a NOT_FOUND-shaped bug', function () {
+    [$tenant] = ownerAndTenant();
+    $appointment = BookingFixture::appointmentFor($tenant, ['status' => 'pending_payment']);
+    BookingFixture::depositPaymentFor($tenant, $appointment, ['status' => 'requires_action']);
+
+    $xsrf = loginAsOwner($tenant);
+
+    $response = postJson("/api/owner/appointments/{$appointment->id}/refund", [], [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+
+    $response->assertStatus(409);
+    $response->assertJson(['error' => 'PAYMENT_NOT_REFUNDABLE']);
+});
+
+test('refunding an already fully-refunded deposit a second time is rejected as 409', function () {
+    [$tenant] = ownerAndTenant();
+    $appointment = BookingFixture::appointmentFor($tenant, ['status' => 'confirmed']);
+    BookingFixture::depositPaymentFor($tenant, $appointment, ['status' => 'refunded', 'amount' => 5000]);
+
+    $xsrf = loginAsOwner($tenant);
+
+    $response = postJson("/api/owner/appointments/{$appointment->id}/refund", [], [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+
+    $response->assertStatus(409);
+    $response->assertJson(['error' => 'PAYMENT_NOT_REFUNDABLE']);
+});
+
+test('an owner cannot refund another tenant\'s appointment, gets a plain 404 — cross-tenant financial-action isolation', function () {
+    [$tenant] = ownerAndTenant();
+    $otherTenant = Tenant::factory()->create();
+    $foreignAppointment = BookingFixture::appointmentFor($otherTenant, ['status' => 'confirmed']);
+    BookingFixture::depositPaymentFor($otherTenant, $foreignAppointment, ['status' => 'succeeded', 'amount' => 5000]);
+
+    $xsrf = loginAsOwner($tenant);
+
+    $response = postJson("/api/owner/appointments/{$foreignAppointment->id}/refund", [], [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+
+    $response->assertStatus(404);
+    $response->assertJson(['error' => 'NOT_FOUND']);
+
+    // The other tenant's own payment/refund state must be completely
+    // unaffected — not just that this request failed, but that RLS never
+    // let it touch the foreign row at all.
+    TenantContext::run($otherTenant->id, function () use ($foreignAppointment) {
+        $payment = Payment::query()->where('appointment_id', $foreignAppointment->id)->first();
+        expect($payment->status)->toBe('succeeded');
+        expect(Refund::query()->where('payment_id', $payment->id)->count())->toBe(0);
+    });
+});
+
+test('a staff member cannot call the owner refund endpoint', function () {
+    $tenant = Tenant::factory()->create();
+
+    TenantContext::run($tenant->id, function () use ($tenant) {
+        User::factory()->create([
+            'tenant_id' => $tenant->id,
+            'role' => 'staff',
+            'email' => 'staff@example.test',
+            'password_hash' => Hash::make('correct-password'),
+        ]);
+    });
+
+    $appointment = BookingFixture::appointmentFor($tenant, ['status' => 'confirmed']);
+    BookingFixture::depositPaymentFor($tenant, $appointment, ['status' => 'succeeded']);
+
+    disableConsoleCsrfBypass();
+    [$xsrf, $login] = loginAndCaptureXsrf("/api/tenants/{$tenant->slug}/login", [
+        'email' => 'staff@example.test',
+        'password' => 'correct-password',
+    ]);
+    $login->assertOk();
+
+    $response = postJson("/api/owner/appointments/{$appointment->id}/refund", [], [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+
+    $response->assertStatus(403);
+});
+
+test('an unauthenticated request to the refund endpoint is rejected', function () {
+    postJson('/api/owner/appointments/some-id/refund')->assertStatus(401);
+});
+
+test('a refund is still allowed on a confirmed (not cancelled) appointment — J8 dispute path, not gated on appointment status', function () {
+    [$tenant] = ownerAndTenant();
+    $appointment = BookingFixture::appointmentFor($tenant, ['status' => 'confirmed']);
+    BookingFixture::depositPaymentFor($tenant, $appointment, ['status' => 'succeeded', 'amount' => 5000]);
+
+    $xsrf = loginAsOwner($tenant);
+
+    $response = postJson("/api/owner/appointments/{$appointment->id}/refund", [], [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+
+    $response->assertOk();
+
+    TenantContext::run($tenant->id, function () use ($appointment) {
+        // The appointment's own status is untouched by a refund — refund
+        // and cancellation are independent workflows (D-0056/D-0051).
+        expect(Appointment::find($appointment->id)->status)->toBe('confirmed');
+    });
 });
 
 test('a cancelled appointment\'s slot can be rebooked — the exclusion constraint\'s partial WHERE excludes cancelled', function () {

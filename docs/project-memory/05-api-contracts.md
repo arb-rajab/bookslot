@@ -375,16 +375,39 @@ already-`completed`/`no_show` appointment, both get this. `404
 one, matching every other tenant-scoped controller in this codebase (not a
 `403`, which would require an out-of-scope cross-tenant existence check).
 
-### 5. `POST /api/owner/appointments/{id}/refund`
+### 5. `POST /api/owner/appointments/{id}/refund` — built Session 26, D-0056
 
-**Request:** `{ "amount": 5000 }` (omit for a full refund of the deposit).
+**Request:** `{ "amount": 5000, "reason": "…" }` (both optional — omit
+`amount` for a full refund of the deposit; `reason` is this app's own
+free-text `refunds.reason`, never forwarded to Stripe's own reason enum).
 
-**Response `200`:** the created `refunds` record and updated payment
-status (`refunded` or `partially_refunded`).
+**Response `200`:** `{ "refund": { ...the created refunds record... },
+"payment_status": "refunded" | "partially_refunded" }`.
 
-**Errors:** `422` if `amount` exceeds the remaining refundable balance on
-the deposit payment; `409` if the deposit payment isn't in a refundable
-state (e.g. already fully refunded).
+**Errors:** `404` if the appointment doesn't exist or belongs to another
+tenant (RLS-indistinguishable, same convention as endpoint 4); `409`
+(`PAYMENT_NOT_REFUNDABLE`) if the deposit payment isn't `succeeded` — this
+covers both a payment that was never captured (no deposit row, or one
+still `requires_action`/`failed`) and one that has already been refunded
+(fully or partially: `04`'s payment state machine draws both `refunded`
+and `partially_refunded` as terminal, so a refund is one-shot per payment,
+never incrementally topped up across multiple calls); `422`
+(`VALIDATION_FAILED`) if `amount` exceeds the payment's own amount; `502`
+(`PAYMENT_PROVIDER_UNAVAILABLE`) if the Stripe call itself throws.
+
+Owner-initiated only (FR-12/J7/J8) — never system-triggered by
+cancellation or any other event, matching this codebase's standing
+explicit-owner-action pattern for anything touching money. Deliberately
+NOT gated on `appointments.status`: J8 allows a refund against an
+otherwise still-`confirmed`/`completed` appointment when a dispute
+requires it, not only after a cancellation. Records a `booking_events` row
+(`event_type: refund_issued`, `actor_type: owner`), the same audit-trail
+pattern D-0053 already uses for dispute tracking. Runs behind
+`auth.tenant.external` (not `auth.tenant`) — see
+`AuthenticateTenantUserWithoutTransactionWrap`'s own docblock — because,
+like `BookingController`/`PaymentConfirmationController`, it calls Stripe
+mid-request and must not hold a database transaction open across that call
+(D-0027).
 
 ### 6. `POST /api/owner/appointments/{id}/balance/charge`
 

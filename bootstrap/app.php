@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Middleware\AuthenticateTenantUser;
+use App\Http\Middleware\AuthenticateTenantUserWithoutTransactionWrap;
 use App\Http\Middleware\EnsureRole;
 use App\Http\Middleware\ResolveTenantForAdminImpersonation;
 use App\Http\Middleware\ResolveTenantFromSignedToken;
@@ -79,6 +80,11 @@ return Application::configure(basePath: dirname(__DIR__))
             'resolve.tenant.slug' => ResolveTenantFromSlug::class,
             'resolve.tenant.token' => ResolveTenantFromSignedToken::class,
             'auth.tenant' => AuthenticateTenantUser::class,
+            // D-0056: same session-based owner auth as `auth.tenant`, but
+            // does not wrap the controller in a transaction — for the one
+            // owner route (refund) that must call Stripe mid-request. See
+            // AuthenticateTenantUserWithoutTransactionWrap's own docblock.
+            'auth.tenant.external' => AuthenticateTenantUserWithoutTransactionWrap::class,
             'resolve.tenant.impersonate' => ResolveTenantForAdminImpersonation::class,
             'role' => EnsureRole::class,
         ]);

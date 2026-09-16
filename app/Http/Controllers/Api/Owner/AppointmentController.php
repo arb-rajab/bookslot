@@ -7,9 +7,13 @@ use App\Models\Appointment;
 use App\Models\BookingEvent;
 use App\Models\NotificationDelivery;
 use App\Models\Payment;
+use App\Models\Refund;
+use App\Payments\PaymentIntentGateway;
+use App\Tenancy\TenantContext;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
+use Throwable;
 
 /**
  * GET/PATCH /api/owner/appointments... (05-api-contracts.md endpoint 4,
@@ -19,11 +23,19 @@ use Illuminate\Validation\Rule;
  * `auth.tenant`, `role:owner` (D-0029; consolidated into one middleware by
  * D-0043) — the whole request already runs inside one DB transaction
  * scoped to the owner's own tenant (BelongsToTenant + RLS), so no manual
- * TenantContext::run() is needed here, unlike BookingController/
- * PaymentConfirmationController: this controller never calls Stripe.
+ * TenantContext::run() is needed here for most actions, unlike
+ * BookingController/PaymentConfirmationController.
+ *
+ * refund() (D-0056) is the one exception: it calls Stripe, so it runs
+ * behind `auth.tenant.external` instead (see routes/api.php and
+ * AuthenticateTenantUserWithoutTransactionWrap), not the `auth.tenant`
+ * group below, and opens its own short TenantContext::run() calls exactly
+ * like BookingController/PaymentConfirmationController already do.
  */
 class AppointmentController extends Controller
 {
+    public function __construct(private readonly PaymentIntentGateway $paymentIntentGateway) {}
+
     /**
      * D-0042: only `confirmed` is a valid prior state for either target
      * status, per 04-data-model.md's booking state machine
@@ -235,6 +247,132 @@ class AppointmentController extends Controller
         ]);
 
         return response()->json($this->presentDetail($appointment->fresh(['customer', 'service', 'staff'])));
+    }
+
+    /**
+     * POST /api/owner/appointments/{id}/refund (05-api-contracts.md
+     * endpoint 5, D-0056). FR-12/J7/J8: owner-initiated only — a refund is
+     * never system-triggered by cancellation or anything else, matching
+     * this codebase's standing "explicit owner action, not automatic"
+     * pattern for anything touching money (D-0006, D-0042, D-0051). Full or
+     * partial, against an already-captured (`succeeded`) deposit payment,
+     * independent of the appointment's own status: J8 explicitly allows a
+     * refund on an otherwise still-`confirmed`/`completed` appointment when
+     * a dispute requires it, not only after a cancellation (J7) — so this
+     * method deliberately does not gate on `appointments.status` at all,
+     * only on the deposit `payments` row's own state.
+     *
+     * Eligibility (04-data-model.md's payment state machine, taken
+     * literally): `succeeded` is the only refundable status, AND it is a
+     * one-shot transition — the diagram draws both `refunded` and
+     * `partially_refunded` as terminal (no outgoing edge at all), so a
+     * payment is refundable exactly once in this codebase's data model,
+     * never incrementally topped up across multiple calls. A payment that
+     * was never captured (no deposit row, or one still `requires_action`/
+     * `failed`) and a payment that has already been refunded (fully or
+     * partially) both fail the same `status !== 'succeeded'` check,
+     * matching 05's documented `409` ("deposit payment isn't in a
+     * refundable state"). Because of that one-shot property, "the
+     * remaining refundable balance" 05's contract refers to is simply the
+     * payment's own `amount` — there is never a prior successful refund to
+     * subtract while status is still `succeeded`. `amount` (minor units)
+     * defaults to the full deposit amount when omitted; exceeding it is
+     * `422`, per 05's contract.
+     */
+    public function refund(Request $request, string $id): JsonResponse
+    {
+        $validated = $request->validate([
+            'amount' => ['nullable', 'integer', 'min:1'],
+            'reason' => ['nullable', 'string'],
+        ]);
+
+        $tenantId = (string) $request->attributes->get('tenant_id');
+
+        // Short, explicit TenantContext::run() — this route runs behind
+        // `auth.tenant.external`, not `auth.tenant`, so (unlike every other
+        // method on this controller) nothing wraps this read in a
+        // transaction automatically. Tenant-scoped by RLS exactly like
+        // updateStatus()'s own find(): a foreign appointment id resolves to
+        // null here, indistinguishable from a nonexistent one.
+        $lookup = TenantContext::run($tenantId, function () use ($id) {
+            $appointment = Appointment::query()->find($id);
+
+            if ($appointment === null) {
+                return null;
+            }
+
+            $payment = Payment::query()
+                ->where('appointment_id', $appointment->id)
+                ->where('type', 'deposit')
+                ->first();
+
+            return ['appointment' => $appointment, 'payment' => $payment];
+        });
+
+        if ($lookup === null) {
+            return response()->json(['error' => 'NOT_FOUND'], 404);
+        }
+
+        $payment = $lookup['payment'];
+
+        if ($payment === null || $payment->status !== 'succeeded') {
+            return response()->json(['error' => 'PAYMENT_NOT_REFUNDABLE'], 409);
+        }
+
+        $refundableBalance = $payment->amount;
+        $amount = $validated['amount'] ?? $refundableBalance;
+
+        if ($amount > $refundableBalance) {
+            return response()->json([
+                'error' => 'VALIDATION_FAILED',
+                'fields' => ['amount' => ["amount exceeds the remaining refundable balance ({$refundableBalance})"]],
+            ], 422);
+        }
+
+        $reason = $validated['reason'] ?? null;
+
+        // D-0027's boundary, applied here for the first time on an owner
+        // route: the Stripe call sits strictly outside any open
+        // transaction, same as BookingController/PaymentConfirmationController.
+        try {
+            $refundResult = $this->paymentIntentGateway->refund($payment->stripe_payment_intent_id, $amount, $reason);
+        } catch (Throwable) {
+            return response()->json(['error' => 'PAYMENT_PROVIDER_UNAVAILABLE'], 502);
+        }
+
+        $result = TenantContext::run($tenantId, function () use ($id, $request, $payment, $amount, $reason, $refundResult, $refundableBalance) {
+            $refund = Refund::query()->create([
+                'payment_id' => $payment->id,
+                'stripe_refund_id' => $refundResult->id,
+                'amount' => $amount,
+                'reason' => $reason,
+                'status' => $refundResult->status,
+            ]);
+
+            if ($refundResult->status === 'succeeded') {
+                $payment->status = $amount === $refundableBalance ? 'refunded' : 'partially_refunded';
+                $payment->save();
+            }
+
+            // The `booking_events` audit-trail pattern D-0053 already
+            // extended to dispute tracking — `refund_issued` is
+            // 04-data-model.md's own named example event_type for exactly
+            // this action, never before written until now.
+            BookingEvent::query()->create([
+                'appointment_id' => $id,
+                'actor_type' => 'owner',
+                'actor_id' => $request->user()->id,
+                'event_type' => 'refund_issued',
+                'metadata' => ['refund_id' => $refund->id, 'amount' => $amount, 'reason' => $reason],
+            ]);
+
+            return ['refund' => $refund, 'payment_status' => $payment->status];
+        });
+
+        return response()->json([
+            'refund' => $result['refund'],
+            'payment_status' => $result['payment_status'],
+        ]);
     }
 
     public function updateStatus(Request $request, string $id): JsonResponse

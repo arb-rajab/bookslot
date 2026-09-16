@@ -32,4 +32,14 @@ interface PaymentIntentGateway
      * `create()`.
      */
     public function retrieve(string $paymentIntentId): PaymentIntentStatus;
+
+    /**
+     * D-0056: refunds (fully or partially) an already-captured deposit
+     * PaymentIntent — Owner\AppointmentController::refund(), 05-api-
+     * contracts.md endpoint 5. `$reason` is this app's own free-text
+     * `refunds.reason` value, never forwarded to Stripe's own constrained
+     * `reason` enum (`duplicate`/`fraudulent`/`requested_by_customer`),
+     * which this app's owner-facing reason text has no reliable mapping to.
+     */
+    public function refund(string $paymentIntentId, int $amountMinorUnits, ?string $reason): RefundResult;
 }

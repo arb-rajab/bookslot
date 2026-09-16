@@ -422,3 +422,79 @@ of preference:
   owner marks no-show` is the only incoming transition) before building
   anything that claims to count no-shows in this codebase — see D-0055 for
   the full writeup.
+
+## Session 26 additions — the refund endpoint; every owner route's `auth.tenant` wraps the WHOLE request in one open transaction, which breaks the moment an owner route needs to call Stripe
+
+- **`auth.tenant` (`AuthenticateTenantUser`) is not just "auth + tenant
+  resolution" — it wraps `$next($request)` itself inside
+  `TenantContext::run()`, which opens a real database transaction
+  (`$db->transaction(...)`, confirmed by reading `TenantContext::run()`'s
+  own implementation) and does not close it until the controller action
+  returns.** Every owner-route controller method before this session
+  implicitly relied on that transaction already being open (none of them
+  call `TenantContext::run()` themselves) — this was invisible because no
+  owner route had ever needed to call Stripe before. The instant one does
+  (this session's refund endpoint), running it behind plain `auth.tenant`
+  would hold that transaction open across the live Stripe call, exactly
+  what D-0027 forbids (previously only ever relevant to the two *public*
+  Stripe-touching routes, `BookingController`/`PaymentConfirmationController`,
+  which sidestep the whole problem by never using `tenant.context`/
+  `auth.tenant` in the first place). **If a future session builds the
+  still-unbuilt `POST /owner/appointments/{id}/balance/charge` endpoint
+  (J5's off-session charge, next on the backlog) or any other owner route
+  that calls Stripe, it needs the same fix this session built** —
+  `auth.tenant.external` (`AuthenticateTenantUserWithoutTransactionWrap`),
+  which performs the identical session-based owner auth check inside one
+  short, immediately-closed `TenantContext::run()`, then continues the
+  pipeline outside any open transaction with `tenant_id` left on the
+  request for the controller to open its own short `TenantContext::run()`
+  calls around (the exact same shape `BookingController`/
+  `PaymentConfirmationController` already use). Don't rediscover this from
+  scratch by tracing `AuthenticateTenantUser`'s docblock again — just reuse
+  the existing `auth.tenant.external` alias and put the new route outside
+  the `owner` prefix group, same as this session's refund route.
+- **`.env.testing`'s `STRIPE_SECRET_KEY=sk_test_dummy_for_tests` "looks
+  real" to `AppServiceProvider`'s own real-vs-fake heuristic** (`str_starts_with('sk_')`
+  and no literal `PLACEHOLDER` substring) — a Feature test file that
+  exercises any Stripe-calling controller method WITHOUT its own
+  `beforeEach(fn () => app()->bind(PaymentIntentGateway::class, fn () =>
+  new FakePaymentIntentGateway))` will silently get the REAL
+  `StripePaymentIntentGateway` at test time, which then throws attempting
+  a real network call against a dummy key — surfacing as a generic 502
+  from whichever controller catches `Throwable` around the Stripe call,
+  not an obviously-Stripe-shaped error. `BookingControllerTest`/
+  `PaymentConfirmationControllerTest` already had this binding; a new test
+  file for any other Stripe-calling endpoint needs the identical
+  `beforeEach()` — confirmed by hitting exactly this failure once while
+  writing this session's refund tests, before adding the binding.
+- **`04-data-model.md`'s payment state machine, read literally, makes a
+  refund one-shot per payment, not incrementally toppable-up.** The
+  mermaid diagram draws `succeeded --> refunded` and `succeeded -->
+  partially_refunded` as the only two outgoing edges from `succeeded`, and
+  both `refunded` and `partially_refunded` themselves go straight to `[*]`
+  (terminal, no further outgoing edge at all). A first implementation
+  attempt this session allowed a second partial refund to "top up" an
+  already-`partially_refunded` payment up to its original remaining
+  balance — that reads naturally from endpoint 5's own contract wording
+  ("the remaining refundable balance"), but directly contradicts the
+  documented state machine once `partially_refunded` is reached. Caught by
+  a test written specifically to exercise that second call, not by
+  inspection — the test expected `200` and got `409` because eligibility
+  is (correctly) gated on `payments.status === 'succeeded'` alone, which a
+  first partial refund already moves away from. Fixed by treating "the
+  remaining refundable balance" as simply the payment's own `amount` (accurate
+  precisely because a `succeeded` payment can only ever be refunded once,
+  so there is never a prior successful refund to subtract at the point
+  this check runs) rather than building a running-balance calculation the
+  state machine doesn't actually support. If a future session wants real
+  incremental multi-refund support, `04`'s diagram needs a new,
+  deliberately-reasoned transition added first — don't infer one from the
+  contract prose alone, which is not itself the authoritative state
+  machine.
+- **`refunds` and `payments` were already both present in
+  `config('tenancy.tenant_scoped_tables')` and RLS-enabled** (from the
+  original migration set, long before this session) — a refund endpoint
+  needed zero new tenant-scoping/RLS work, only correct use of the
+  existing `TenantContext::run()` pattern. Don't assume a new
+  money-movement table needs new RLS wiring without checking
+  `config/tenancy.php` first; it may already be covered.

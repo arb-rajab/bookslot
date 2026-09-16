@@ -112,6 +112,17 @@ Route::prefix('owner')
         Route::get('queue-health', [OwnerQueueHealthController::class, 'show']);
     });
 
+// D-0056 (docs/project-memory/09-decision-log.md, amends D-0027 to a second
+// owner-facing route): deliberately NOT inside the `owner` group above —
+// `auth.tenant` wraps the whole request in one transaction, which this
+// route must not hold open across its Stripe refund call. `auth.tenant.
+// external` performs the identical session-based owner auth without that
+// wrap; the controller opens its own short, explicit TenantContext::run()
+// calls around the Stripe call, same discipline as BookingController/
+// PaymentConfirmationController.
+Route::middleware(['auth.tenant.external', 'role:owner'])
+    ->post('owner/appointments/{id}/refund', [OwnerAppointmentController::class, 'refund']);
+
 Route::prefix('staff')
     ->middleware(['auth.tenant', 'role:staff'])
     ->group(function () {

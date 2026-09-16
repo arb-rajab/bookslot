@@ -148,8 +148,9 @@ function statusLabel(status: string): string {
       <section v-if="cancellable" class="card">
         <h2>Cancel this appointment</h2>
         <p class="muted">
-          Bookkeeping only — this does not issue a refund on Stripe. A deposit refund is a separate,
-          not-yet-built capability (05-api-contracts.md's refund endpoint).
+          Bookkeeping only — this does not issue a refund on Stripe. A deposit refund is a separate
+          action (05-api-contracts.md's refund endpoint, `POST .../refund`, D-0056) with no button on
+          this page yet.
         </p>
         <p v-if="cancelError" class="error">{{ cancelError }}</p>
         <div class="cancel-form">
