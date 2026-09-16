@@ -63,6 +63,52 @@ function disputeEventPayload(string $type, ?string $paymentIntentId, string $cha
     ], JSON_THROW_ON_ERROR);
 }
 
+// D-0058: `account.updated`'s `data.object` IS the Stripe Account itself —
+// unlike a Dispute, it DOES carry whatever `metadata` this codebase wrote
+// at account-creation time (ConnectOnboardingGateway::createAccount()),
+// so this flows through StripeWebhookController's existing generic
+// `data.object.metadata.tenant_id` resolution with no special-casing.
+function accountUpdatedEventPayload(string $accountId, string $tenantId, array $objectOverrides = []): string
+{
+    return json_encode([
+        'id' => 'evt_'.bin2hex(random_bytes(8)),
+        'type' => 'account.updated',
+        'account' => $accountId,
+        'data' => [
+            'object' => array_merge([
+                'id' => $accountId,
+                'object' => 'account',
+                'charges_enabled' => true,
+                'details_submitted' => true,
+                'requirements' => ['disabled_reason' => null],
+                'metadata' => ['tenant_id' => $tenantId],
+            ], $objectOverrides),
+        ],
+    ], JSON_THROW_ON_ERROR);
+}
+
+// D-0058: `account.application.deauthorized`'s `data.object` is a Stripe
+// Application (client_id/name) — a genuinely different object from the
+// Account itself, carrying no `metadata.tenant_id` at all. The only field
+// this event type reliably carries that ties back to a tenant is the
+// Event's own top-level `account` field (Stripe's standard way of naming
+// which connected account a Connect event concerns).
+function accountDeauthorizedEventPayload(string $accountId): string
+{
+    return json_encode([
+        'id' => 'evt_'.bin2hex(random_bytes(8)),
+        'type' => 'account.application.deauthorized',
+        'account' => $accountId,
+        'data' => [
+            'object' => [
+                'id' => 'ca_fake_application',
+                'object' => 'application',
+                'name' => 'bookslot',
+            ],
+        ],
+    ], JSON_THROW_ON_ERROR);
+}
+
 // Pest\Laravel\postJson always JSON-encodes its $data argument, which would
 // double-encode our already-JSON payload and break the signature (it must
 // be computed over the exact bytes Stripe would send). Dispatches through
@@ -310,4 +356,86 @@ test('tenant A\'s webhook event never touches tenant B\'s appointment, even with
 
     BookingFixture::assertStatus($tenantA, $appointmentA->id, 'confirmed');
     BookingFixture::assertStatus($tenantB, $appointmentB->id, 'pending_payment');
+});
+
+test('D-0058: account.updated marks the tenant complete once Stripe reports charges enabled and details submitted', function () {
+    $tenant = Tenant::factory()->create(['stripe_connect_account_id' => 'acct_webhook_complete', 'stripe_onboarding_status' => 'pending']);
+
+    $payload = accountUpdatedEventPayload('acct_webhook_complete', $tenant->id);
+
+    $response = postRawSignedWebhook($payload);
+
+    $response->assertOk();
+    $response->assertJson(['status' => 'accepted']);
+
+    expect(Tenant::query()->find($tenant->id)->stripe_onboarding_status)->toBe('complete');
+});
+
+test('D-0058: account.updated marks the tenant restricted when Stripe reports a disabled_reason, even if charges are still enabled', function () {
+    $tenant = Tenant::factory()->create(['stripe_connect_account_id' => 'acct_webhook_restricted', 'stripe_onboarding_status' => 'complete']);
+
+    $payload = accountUpdatedEventPayload('acct_webhook_restricted', $tenant->id, [
+        'charges_enabled' => true,
+        'requirements' => ['disabled_reason' => 'requirements.past_due'],
+    ]);
+
+    $response = postRawSignedWebhook($payload);
+
+    $response->assertOk();
+    $response->assertJson(['status' => 'accepted']);
+
+    expect(Tenant::query()->find($tenant->id)->stripe_onboarding_status)->toBe('restricted');
+});
+
+test('D-0058: account.updated marks the tenant pending while details are not yet submitted', function () {
+    $tenant = Tenant::factory()->create(['stripe_connect_account_id' => 'acct_webhook_pending', 'stripe_onboarding_status' => 'pending']);
+
+    $payload = accountUpdatedEventPayload('acct_webhook_pending', $tenant->id, [
+        'charges_enabled' => false,
+        'details_submitted' => false,
+        'requirements' => ['disabled_reason' => null],
+    ]);
+
+    postRawSignedWebhook($payload)->assertOk()->assertJson(['status' => 'accepted']);
+
+    expect(Tenant::query()->find($tenant->id)->stripe_onboarding_status)->toBe('pending');
+});
+
+test('D-0058: account.updated only ever touches the tenant its own metadata.tenant_id names, never another tenant with the same-shaped payload', function () {
+    $tenantA = Tenant::factory()->create(['stripe_connect_account_id' => 'acct_tenant_a', 'stripe_onboarding_status' => 'pending']);
+    $tenantB = Tenant::factory()->create(['stripe_connect_account_id' => 'acct_tenant_b', 'stripe_onboarding_status' => 'pending']);
+
+    $payload = accountUpdatedEventPayload('acct_tenant_a', $tenantA->id);
+
+    postRawSignedWebhook($payload)->assertOk();
+
+    expect(Tenant::query()->find($tenantA->id)->stripe_onboarding_status)->toBe('complete');
+    expect(Tenant::query()->find($tenantB->id)->stripe_onboarding_status)->toBe('pending');
+});
+
+test('D-0058: account.application.deauthorized resolves the tenant via its Connect account id and marks it restricted, untouched by metadata', function () {
+    $tenantA = Tenant::factory()->create(['stripe_connect_account_id' => 'acct_deauthorized_a', 'stripe_onboarding_status' => 'complete']);
+    $tenantB = Tenant::factory()->create(['stripe_connect_account_id' => 'acct_deauthorized_b', 'stripe_onboarding_status' => 'complete']);
+
+    $payload = accountDeauthorizedEventPayload('acct_deauthorized_a');
+
+    $response = postRawSignedWebhook($payload);
+
+    $response->assertOk();
+    $response->assertJson(['status' => 'accepted']);
+
+    expect(Tenant::query()->find($tenantA->id)->stripe_onboarding_status)->toBe('restricted');
+    expect(Tenant::query()->find($tenantB->id)->stripe_onboarding_status)->toBe('complete');
+});
+
+test('D-0058: account.application.deauthorized for an unknown Connect account id is recorded but resolves to no tenant', function () {
+    $payload = accountDeauthorizedEventPayload('acct_never_seen_before');
+
+    $response = postRawSignedWebhook($payload);
+
+    $response->assertOk();
+    $response->assertJson(['status' => 'recorded_unresolved_tenant']);
+
+    $event = StripeWebhookEvent::query()->where('type', 'account.application.deauthorized')->firstOrFail();
+    expect($event->processed_at)->toBeNull();
 });

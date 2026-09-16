@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Jobs\ProcessStripeWebhookJob;
 use App\Jobs\ResolveStripeDisputeTenantJob;
 use App\Models\StripeWebhookEvent;
+use App\Models\Tenant;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -82,6 +83,37 @@ class StripeWebhookController extends Controller
             ResolveStripeDisputeTenantJob::dispatch($event->id);
 
             return response()->json(['status' => 'accepted']);
+        }
+
+        // D-0058: `account.application.deauthorized`'s `data.object` is a
+        // Stripe Application, never the Account itself — it carries no
+        // `metadata.tenant_id` the way `account.updated`'s own
+        // Account-shaped `data.object` does (see
+        // ConnectOnboardingGateway::createAccount()'s metadata). Resolved
+        // instead via the event's own top-level `account` field (Stripe's
+        // standard way of naming which connected account a Connect event
+        // is about) against `tenants.stripe_connect_account_id` — a single
+        // indexed lookup on a table that is deliberately not RLS-scoped
+        // (04-data-model.md's tenancy-boundary section), so this needs no
+        // ResolveStripeDisputeTenantJob-style per-tenant fan-out.
+        if ($event->type === 'account.application.deauthorized') {
+            $connectAccountId = $eventArray['account'] ?? null;
+            $resolvedTenantId = is_string($connectAccountId)
+                ? Tenant::query()->where('stripe_connect_account_id', $connectAccountId)->value('id')
+                : null;
+
+            if (is_string($resolvedTenantId)) {
+                ProcessStripeWebhookJob::dispatch($resolvedTenantId, $event->id);
+
+                return response()->json(['status' => 'accepted']);
+            }
+
+            Log::warning('account.application.deauthorized webhook matches no known Connect account — tenant unresolved', [
+                'stripe_event_id' => $event->id,
+                'stripe_connect_account_id' => $connectAccountId,
+            ]);
+
+            return response()->json(['status' => 'recorded_unresolved_tenant']);
         }
 
         // Recorded for audit/ops visibility (this table is deliberately

@@ -534,6 +534,22 @@ assumes real Postgres, full stop.
   payment in any tenant, and a dispute carrying no `payment_intent` at
   all) both leave the event genuinely unprocessed rather than silently
   misattributed.
+- **Connect onboarding (D-0058, Session 28):** account creation +
+  Account Link generation/refresh, the already-onboarded case (link
+  re-issued without recreating the account), a Stripe API failure at
+  either step mapped to `502`, and the live status-check endpoint
+  (`not_started` short-circuit with zero Stripe calls, a `restricted`
+  classification winning over `charges_enabled: true`, a Stripe outage
+  leaving the stored status uncorrupted) —
+  `tests/Feature/Api/OwnerStripeConnectControllerTest.php`. Webhook side
+  (`account.updated`, `account.application.deauthorized`) in
+  `tests/Feature/Api/StripeWebhookControllerTest.php`: the three
+  onboarding-status classifications, a same-shaped-payload two-tenant
+  isolation case for `account.updated`, and `account.application
+  .deauthorized`'s `stripe_connect_account_id`-based resolution (including
+  its own two-tenant isolation proof and its unknown-account orphan case).
+  Fake-tier only, per D-0036 — `StripeConnectOnboardingGateway` is real
+  code never exercised against real Stripe.
 
 **What genuinely cannot be tested automatically — a manual pre-launch
 checklist, not a gap in the automated suite:**

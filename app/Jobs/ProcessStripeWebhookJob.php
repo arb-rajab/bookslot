@@ -7,6 +7,8 @@ use App\Models\BookingEvent;
 use App\Models\Payment;
 use App\Models\PaymentMandate;
 use App\Models\StripeWebhookEvent;
+use App\Models\Tenant;
+use App\Payments\ConnectAccountStatus;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
@@ -70,6 +72,8 @@ class ProcessStripeWebhookJob extends TenantScopedJob
                 'payment_intent.succeeded' => $this->handlePaymentIntentSucceeded($event->payload),
                 'payment_intent.payment_failed' => $this->handlePaymentIntentFailed($event->payload),
                 'charge.dispute.created', 'charge.dispute.closed' => $this->handleChargeDispute($event->type, $event->payload),
+                'account.updated' => $this->handleAccountUpdated($event->payload),
+                'account.application.deauthorized' => $this->handleAccountDeauthorized(),
                 default => Log::info('Stripe webhook event type recorded but not handled', ['type' => $event->type, 'stripe_event_id' => $this->stripeEventId]),
             };
         } catch (Throwable $e) {
@@ -198,5 +202,67 @@ class ProcessStripeWebhookJob extends TenantScopedJob
                 'amount' => $object['amount'] ?? null,
             ],
         ]);
+    }
+
+    /**
+     * D-0058: `data.object` on `account.updated` is the Stripe Account
+     * itself — the same three fields
+     * ConnectOnboardingGateway::retrieveAccountStatus() reads from a live
+     * API call, here read from the webhook's own verified payload instead,
+     * classified via the identical ConnectAccountStatus::toOnboardingStatus()
+     * so this asynchronous path and the synchronous status-check endpoint
+     * can never disagree about what a given set of Stripe fields means.
+     * `tenants` is not RLS-scoped (04-data-model.md) — a plain `find()` by
+     * this job's own already-resolved tenant_id is correct and sufficient.
+     *
+     * @param  array<string, mixed>  $payload
+     */
+    private function handleAccountUpdated(array $payload): void
+    {
+        $object = $payload['data']['object'];
+
+        $status = new ConnectAccountStatus(
+            (bool) ($object['charges_enabled'] ?? false),
+            (bool) ($object['details_submitted'] ?? false),
+            $object['requirements']['disabled_reason'] ?? null,
+        );
+
+        $tenant = Tenant::query()->find($this->tenantId);
+
+        if ($tenant === null) {
+            Log::warning('account.updated webhook resolved a tenant that no longer exists', ['tenant_id' => $this->tenantId]);
+
+            return;
+        }
+
+        $tenant->stripe_onboarding_status = $status->toOnboardingStatus();
+        $tenant->save();
+    }
+
+    /**
+     * D-0058: the platform's access to this tenant's connected account has
+     * been revoked (the owner disconnected it from their own Stripe
+     * dashboard, or Stripe itself revoked it) — the one Connect event this
+     * codebase treats as unconditionally `restricted`, regardless of
+     * whatever `charges_enabled`/`details_submitted` last said. Does not
+     * clear `stripe_connect_account_id`: that id remains a true historical
+     * record of which account was connected, and `onboardingLink()`
+     * re-issuing a link against a deauthorized account is Stripe's own
+     * problem to reject, not something this codebase needs to pre-empt by
+     * inventing account replacement here — a genuinely separate, unbuilt
+     * concern, out of this session's scope.
+     */
+    private function handleAccountDeauthorized(): void
+    {
+        $tenant = Tenant::query()->find($this->tenantId);
+
+        if ($tenant === null) {
+            Log::warning('account.application.deauthorized webhook resolved a tenant that no longer exists', ['tenant_id' => $this->tenantId]);
+
+            return;
+        }
+
+        $tenant->stripe_onboarding_status = 'restricted';
+        $tenant->save();
     }
 }
