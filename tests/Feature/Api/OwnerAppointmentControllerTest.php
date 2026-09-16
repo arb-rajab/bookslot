@@ -109,15 +109,16 @@ test('the appointments list reports a tenant-scoped no-show count that ignores o
 test('the no-show count respects the from/to window but not the status filter, so filtering to another status does not zero it', function () {
     [$tenant] = ownerAndTenant();
 
+    $past = now()->subDays(10);
+    $future = now()->addDays(10);
+
     BookingFixture::appointmentFor($tenant, [
         'status' => 'no_show',
-        'starts_at' => now()->subDays(10),
-        'ends_at' => now()->subDays(10)->addHour(),
+        'appointment_range' => sprintf('[%s,%s)', $past->toIso8601String(), $past->copy()->addHour()->toIso8601String()),
     ]);
     BookingFixture::appointmentFor($tenant, [
         'status' => 'no_show',
-        'starts_at' => now()->addDays(10),
-        'ends_at' => now()->addDays(10)->addHour(),
+        'appointment_range' => sprintf('[%s,%s)', $future->toIso8601String(), $future->copy()->addHour()->toIso8601String()),
     ]);
     BookingFixture::appointmentFor($tenant, ['status' => 'confirmed']);
 
