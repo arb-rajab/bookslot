@@ -350,3 +350,75 @@ of preference:
   Reviewing/merging the 7 open bump PRs is not the same claim as "no
   unaddressed Dependabot alerts exist" — that second claim was not and
   could not be verified this session.
+
+## Session 25 additions — FR-15 no-show count; a fresh container has no `.env`/`APP_KEY` even after `.env.example` is copied
+
+- **`cp .env.example .env` does NOT give you a working `APP_KEY`** — the
+  example file ships with `APP_KEY=` empty, same as Session 23 already
+  found for `.env.testing`'s own copy. Forgetting the immediately-following
+  `php artisan key:generate --force` doesn't fail migrations or Pest (Pest
+  loads `.env.testing`, which already ships a real key baked in), so it's
+  easy to migrate/seed successfully and only discover the gap later, and
+  confusingly: `php artisan serve` + a real HTTP request against it fails
+  with `MissingAppKeyException`, but a bare `php artisan migrate` or
+  `php artisan db:seed` never touches encryption and works fine either
+  way. If a real `php artisan serve` (for Playwright's `webServer`, or any
+  manual `curl` against the dev API) 500s immediately on the very first
+  request with `MissingAppKeyException`, check `grep APP_KEY .env` before
+  assuming anything about routes/controllers/middleware is broken.
+- **The three Playwright E2E specs that create appointments through the
+  real booking flow (`booking-flow.spec.ts`, `manage-booking-cancel.spec.ts`,
+  `owner-appointment-actions.spec.ts`, `owner-admin-forms.spec.ts`) are
+  only safe to run against a freshly `migrate:fresh --seed`ed `bookslot`
+  dev database — running them a second time (or running one spec file
+  twice) without re-seeding in between is NOT just "extra harmless test
+  data," it can make a *later* run fail outright.** `owner-appointment-
+  actions.spec.ts`'s own row locators match by substring + `.first()`
+  (e.g. `page.locator('tr', { has: page.getByRole('cell', { name:
+  'E2E NoShow', exact: false }) }).first()`) — real, deliberate, since each
+  test run's customer name carries a `Date.now()` suffix precisely so
+  concurrent/sequential runs don't collide on an *exact* name — but
+  `.first()` picks whichever matching row sorts first by `starts_at`
+  (the list's own sort order), not the row this test run just created. A
+  second run leaves the first run's own same-labelled row (already
+  advanced to `completed`/`cancelled`/whatever that earlier run did to it)
+  sitting in the same list, and if it happens to sort earlier, `.first()`
+  binds to the **stale** row instead of the new one — the click either
+  lands on a row with no matching action button (nothing happens) or
+  produces a status assertion failure that looks exactly like a real
+  regression (a timeout waiting for a status text to appear) but is 100%
+  a leftover-data artifact. **Confirmed directly this session, the hard
+  way:** re-running `owner-appointment-actions.spec.ts` a second time
+  without re-seeding reliably reproduced this exact failure — proven
+  innocent only by re-running against `main`'s own unmodified controller/
+  page (identical failure) and then again after a fresh `migrate:fresh
+  --seed` (10/10 passed both times, isolated spec and the full suite
+  together). **Always `php artisan migrate:fresh --seed
+  --database=pgsql_migrator` (with `.env` pointed at `bookslot`, per
+  Session 23's own note) immediately before the one real Playwright run
+  you intend to trust** — don't chain multiple manual re-runs against the
+  same seeded data and don't infer a real bug from a second run's failure
+  without re-seeding and repeating first. This is a pre-existing property
+  of these four spec files' own locator design (not something this
+  session changed or fixed — genuinely out of FR-15's scope, and D-0054
+  already established these same specs pass 10/10 against a single fresh
+  seed in real CI), flagged here purely so a future session doesn't burn
+  time chasing a phantom regression that's actually just stale local
+  fixture data.
+- **FR-15's "basic no-show count" was scoped from the requirement text
+  itself, not assumed from the feature name — and the data-source
+  question genuinely diverged from what a plausible-sounding guess would
+  produce.** `ReleaseExpiredPendingBookingJob` (FR-05/D-0049) — the
+  mechanism a prompt or a skim of the feature name might reasonably guess
+  feeds a "no-show" count — only ever transitions a still-`pending_payment`
+  booking to `status = 'cancelled'` (`cancelled_by: 'system'`,
+  `cancelled_reason: 'hold_window_expired'`); it has no code path that
+  ever writes `status = 'no_show'` and never touches an already-`confirmed`
+  appointment at all. The only way `status = 'no_show'` is ever reached in
+  this codebase is `Owner\AppointmentController::updateStatus()` — an
+  explicit owner click (FR-07/D-0042), which is also exactly what J4 (no
+  automatic no-show detection) requires. Verify this distinction directly
+  against `04-data-model.md`'s state machine (`confirmed --> no_show:
+  owner marks no-show` is the only incoming transition) before building
+  anything that claims to count no-shows in this codebase — see D-0055 for
+  the full writeup.

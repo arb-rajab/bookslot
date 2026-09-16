@@ -63,6 +63,12 @@ test that fails if it regresses — not merely coded and assumed correct.
       same browser-execution caveat as the booking page (R-08); the
       `cancelled` transition and any refund interaction were deliberately
       left out (D-0042), not built.*
+- [x] **No-show count on the owner dashboard** (FR-15, the piece D-0042
+      left unbuilt) — `GET /api/owner/appointments` now returns a
+      tenant-wide `no_show_count` alongside the appointment list, rendered
+      on the same real owner-facing dashboard page (D-0055, Session 25). A
+      raw count only, reading the explicit-owner-action `no_show` status
+      (J4), not FR-05's unrelated hold-window-expiry mechanism.
 - [x] **The reconciliation safeguard for R-07** — `mandates:reconcile-backfill`
       (D-0037), scheduled hourly, flags any `payment_mandates` row whose
       `stripe_payment_method_id` sits `NULL` past a reasoned 30-minute grace
@@ -124,9 +130,6 @@ migration, a route, or a stub controller behind it.
       against a single seeded demo tenant with no onboarding flow of its
       own; there is no path today for a second, real business to connect a
       Stripe account to this product at all.
-- [ ] **No-show count on the owner dashboard** (part of FR-15) — the
-      appointment list and deposit status are real; the summary count is
-      not, in either the API response or the frontend.
 
 ### Permanently unverifiable by deliberate project-scope choice
 
