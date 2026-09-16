@@ -85,6 +85,60 @@ test('an owner sees appointments across every staff member in their tenant, with
     expect($rowA['deposit_status'])->toBe('succeeded');
 });
 
+test('the appointments list reports a tenant-scoped no-show count that ignores other tenants and non-no_show statuses', function () {
+    [$tenant] = ownerAndTenant();
+
+    BookingFixture::appointmentFor($tenant, ['status' => 'no_show']);
+    BookingFixture::appointmentFor($tenant, ['status' => 'no_show']);
+    BookingFixture::appointmentFor($tenant, ['status' => 'confirmed']);
+    BookingFixture::appointmentFor($tenant, ['status' => 'completed']);
+
+    // A no_show appointment in a different tenant must never leak into
+    // this tenant's count — FR-15 names the tenant as the count's scope.
+    $otherTenant = Tenant::factory()->create();
+    BookingFixture::appointmentFor($otherTenant, ['status' => 'no_show']);
+
+    $xsrf = loginAsOwner($tenant);
+
+    $response = getJson('/api/owner/appointments', ['Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf]);
+
+    $response->assertOk();
+    $response->assertJson(['no_show_count' => 2]);
+});
+
+test('the no-show count respects the from/to window but not the status filter, so filtering to another status does not zero it', function () {
+    [$tenant] = ownerAndTenant();
+
+    BookingFixture::appointmentFor($tenant, [
+        'status' => 'no_show',
+        'starts_at' => now()->subDays(10),
+        'ends_at' => now()->subDays(10)->addHour(),
+    ]);
+    BookingFixture::appointmentFor($tenant, [
+        'status' => 'no_show',
+        'starts_at' => now()->addDays(10),
+        'ends_at' => now()->addDays(10)->addHour(),
+    ]);
+    BookingFixture::appointmentFor($tenant, ['status' => 'confirmed']);
+
+    $xsrf = loginAsOwner($tenant);
+
+    // Filtering the list to a status other than no_show must not make the
+    // summary count report 0 — it describes the window, not the list filter.
+    $filtered = getJson('/api/owner/appointments?status=confirmed', [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+    $filtered->assertOk();
+    $filtered->assertJson(['no_show_count' => 2]);
+
+    // A date window narrows the count to only the no-show(s) inside it.
+    $windowed = getJson('/api/owner/appointments?from='.now()->subDays(1)->toISOString().'&to='.now()->addDays(30)->toISOString(), [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+    $windowed->assertOk();
+    $windowed->assertJson(['no_show_count' => 1]);
+});
+
 test('an owner marking a confirmed appointment attended records completed and a booking_events row', function () {
     [$tenant] = ownerAndTenant();
     $appointment = BookingFixture::appointmentFor($tenant, ['status' => 'confirmed']);

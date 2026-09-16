@@ -6,6 +6,7 @@ definePageMeta({ layout: 'owner' })
 const { authState } = useOwnerSession()
 
 const appointments = ref<OwnerAppointment[]>([])
+const noShowCount = ref<number | null>(null)
 const loading = ref(false)
 const listError = ref<string | null>(null)
 const actionError = ref<string | null>(null)
@@ -26,8 +27,9 @@ async function loadAppointments(): Promise<void> {
   listError.value = null
 
   try {
-    const response = await apiFetch<{ appointments: OwnerAppointment[] }>('/owner/appointments')
+    const response = await apiFetch<{ appointments: OwnerAppointment[]; no_show_count: number }>('/owner/appointments')
     appointments.value = response.appointments
+    noShowCount.value = response.no_show_count
   } catch (e) {
     listError.value = describeError(apiErrorBody(e).error)
   } finally {
@@ -75,6 +77,8 @@ function statusLabel(status: string): string {
 <template>
   <div>
     <h1>Appointments</h1>
+
+    <p v-if="noShowCount !== null" class="stat">No-shows: {{ noShowCount }}</p>
 
     <p v-if="listError" class="error">{{ listError }}</p>
     <p v-if="actionError" class="error">{{ actionError }}</p>
@@ -150,6 +154,11 @@ function statusLabel(status: string): string {
 .muted {
   color: #666;
   font-size: 0.9rem;
+}
+
+.stat {
+  font-weight: 600;
+  margin: 0 0 1rem;
 }
 
 .error {

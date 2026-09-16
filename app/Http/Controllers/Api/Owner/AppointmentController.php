@@ -71,7 +71,51 @@ class AppointmentController extends Controller
 
         return response()->json([
             'appointments' => $appointments->map(fn (Appointment $appointment) => $this->present($appointment)),
+            'no_show_count' => $this->noShowCount($validated),
         ]);
+    }
+
+    /**
+     * FR-15 (02-requirements.md): "a basic no-show count, scoped strictly
+     * to the owner's own tenant" — a raw count (not a rate/percentage),
+     * tenant-wide (not per customer/per service; the requirement names
+     * only the tenant as a scope). RLS + BelongsToTenant already confine
+     * this to the caller's own tenant, the same as every other query in
+     * this controller.
+     *
+     * Deliberately re-reads `appointments.status = 'no_show'` directly,
+     * not any hold-window/expiry mechanism: FR-05's
+     * ReleaseExpiredPendingBookingJob (D-0049) only ever transitions a
+     * `pending_payment` booking to `cancelled` (an unpaid slot released,
+     * `cancelled_reason = 'hold_window_expired'`) — it has nothing to do
+     * with no-shows. A no-show is `confirmed -> no_show`, set only by an
+     * explicit owner action via `updateStatus()` above (FR-07, D-0042).
+     * That explicit-action-only path is exactly what J4 (no automatic
+     * no-show detection) requires, so counting it introduces no new
+     * detection logic — it only counts owner-made decisions that already
+     * exist.
+     *
+     * Uses the same `from`/`to` window as the list above (the count on the
+     * dashboard should describe the same period being viewed), but
+     * deliberately ignores the `status` filter — otherwise filtering the
+     * list to `status=confirmed` would make this always report 0,
+     * defeating the point of a standing summary count.
+     *
+     * @param  array{from?: string, to?: string}  $validated
+     */
+    private function noShowCount(array $validated): int
+    {
+        $query = Appointment::query()->where('status', 'no_show');
+
+        if (isset($validated['from'])) {
+            $query->where('starts_at', '>=', $validated['from']);
+        }
+
+        if (isset($validated['to'])) {
+            $query->where('starts_at', '<=', $validated['to']);
+        }
+
+        return $query->count();
     }
 
     /**

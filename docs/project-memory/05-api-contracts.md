@@ -150,7 +150,7 @@ and rate-limit numbers are still future-session work (see Deferred below).
 
 | Method & path | Purpose |
 |---|---|
-| `GET /api/owner/appointments?from=&to=&status=` | Dashboard calendar/list view — **built Session 17, D-0042**, own tenant's appointments across every staff member (D-0013's own-bookings narrowing is a staff rule, not an owner one) |
+| `GET /api/owner/appointments?from=&to=&status=` | Dashboard calendar/list view — **built Session 17, D-0042**, own tenant's appointments across every staff member (D-0013's own-bookings narrowing is a staff rule, not an owner one); response also carries a tenant-wide `no_show_count` (FR-15, D-0055, Session 25) |
 | `PATCH /api/owner/appointments/{id}/status` | Mark `completed` / `no_show` — **`completed`/`no_show` built Session 17, D-0042**; `cancelled` deliberately not accepted by this endpoint yet, see D-0042 |
 | `POST /api/owner/appointments/{id}/refund` | Issue a full/partial refund on the deposit |
 | `POST /api/owner/appointments/{id}/balance/charge` | Trigger the off-session balance charge |
@@ -340,6 +340,14 @@ silently treated as idempotent.
   already `completed`/`no_show`/`cancelled`.
 
 ### 4. `PATCH /api/owner/appointments/{id}/status` — `completed`/`no_show` built Session 17, D-0042
+
+**Sibling note (D-0055, Session 25):** `GET /api/owner/appointments`'s
+response now also carries `no_show_count` — a plain integer, tenant-wide,
+counting rows where `status = 'no_show'` within the request's `from`/`to`
+window (the same window as the returned list), independent of the `status`
+query filter. See D-0055 for why: it is the count that endpoint 4 itself
+produces by writing `no_show` via an explicit owner action, never a value
+derived from FR-05's hold-window-expiry mechanism.
 
 **Request:** `{ "status": "no_show" }` or `{ "status": "completed" }`.
 `{ "status": "cancelled", "reason": "…" }` is documented here as a future
