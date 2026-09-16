@@ -47,4 +47,17 @@ final class FakePaymentIntentGateway implements PaymentIntentGateway
 
         return new RefundResult($id, 'succeeded');
     }
+
+    public function chargeOffSession(
+        string $paymentMethodId,
+        int $amountMinorUnits,
+        string $currency,
+        ?string $connectedAccountId,
+        int $applicationFeeAmountMinorUnits,
+        array $metadata,
+    ): OffSessionChargeResult {
+        $id = 'pi_fake_balance_'.substr(md5(serialize($metadata)), 0, 16);
+
+        return new OffSessionChargeResult('succeeded', $id, null);
+    }
 }

@@ -2,6 +2,7 @@
 
 namespace App\Payments;
 
+use Stripe\Exception\CardException;
 use Stripe\StripeClient;
 
 /**
@@ -61,5 +62,60 @@ final class StripePaymentIntentGateway implements PaymentIntentGateway
         ]);
 
         return new RefundResult($refund->id, $refund->status);
+    }
+
+    /**
+     * D-0057: per Stripe's documented off-session-reuse-without-a-Customer
+     * pattern — the same `payment_method` ID a `setup_future_usage:
+     * off_session` PaymentIntent saved (D-0006's `create()` above) can be
+     * confirmed directly against a NEW PaymentIntent via `off_session:
+     * true, confirm: true`, without ever creating a Stripe Customer object.
+     * This mirrors `create()`'s own deliberate choice not to pass a
+     * `customer` param — this codebase has never created one, on either
+     * side of this charge. `confirm()`-time failures (a decline, or SCA
+     * that can't complete without the cardholder present) surface as a
+     * thrown `CardException`, not a returned `requires_action` status —
+     * Stripe's documented behavior for `off_session: true` confirms,
+     * unlike the on-session confirm flow `retrieve()` above reads back
+     * from. Never verified against real Stripe (D-0036) — written to
+     * match Stripe's published API docs for this flow, exercised only via
+     * the fake tiers.
+     */
+    public function chargeOffSession(
+        string $paymentMethodId,
+        int $amountMinorUnits,
+        string $currency,
+        ?string $connectedAccountId,
+        int $applicationFeeAmountMinorUnits,
+        array $metadata,
+    ): OffSessionChargeResult {
+        $params = [
+            'amount' => $amountMinorUnits,
+            'currency' => $currency,
+            'payment_method' => $paymentMethodId,
+            'off_session' => true,
+            'confirm' => true,
+            'metadata' => $metadata,
+        ];
+
+        if ($connectedAccountId !== null) {
+            $params['transfer_data'] = ['destination' => $connectedAccountId];
+            $params['application_fee_amount'] = $applicationFeeAmountMinorUnits;
+        }
+
+        try {
+            $paymentIntent = $this->client->paymentIntents->create($params);
+
+            return new OffSessionChargeResult('succeeded', $paymentIntent->id, null);
+        } catch (CardException $e) {
+            $error = $e->getError();
+            $failedPaymentIntent = $error->payment_intent ?? null;
+
+            return new OffSessionChargeResult(
+                'failed',
+                is_object($failedPaymentIntent) ? $failedPaymentIntent->id : ('pi_unknown_'.substr(md5(serialize($metadata)), 0, 16)),
+                $error->code ?? 'card_declined',
+            );
+        }
     }
 }

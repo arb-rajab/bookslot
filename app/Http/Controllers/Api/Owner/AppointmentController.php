@@ -7,7 +7,9 @@ use App\Models\Appointment;
 use App\Models\BookingEvent;
 use App\Models\NotificationDelivery;
 use App\Models\Payment;
+use App\Models\PaymentMandate;
 use App\Models\Refund;
+use App\Models\Tenant;
 use App\Payments\PaymentIntentGateway;
 use App\Tenancy\TenantContext;
 use Illuminate\Http\JsonResponse;
@@ -26,11 +28,12 @@ use Throwable;
  * TenantContext::run() is needed here for most actions, unlike
  * BookingController/PaymentConfirmationController.
  *
- * refund() (D-0056) is the one exception: it calls Stripe, so it runs
- * behind `auth.tenant.external` instead (see routes/api.php and
- * AuthenticateTenantUserWithoutTransactionWrap), not the `auth.tenant`
- * group below, and opens its own short TenantContext::run() calls exactly
- * like BookingController/PaymentConfirmationController already do.
+ * refund() (D-0056) and chargeBalance() (D-0057) are the two exceptions:
+ * both call Stripe, so both run behind `auth.tenant.external` instead (see
+ * routes/api.php and AuthenticateTenantUserWithoutTransactionWrap), not the
+ * `auth.tenant` group below, and both open their own short
+ * TenantContext::run() calls exactly like
+ * BookingController/PaymentConfirmationController already do.
  */
 class AppointmentController extends Controller
 {
@@ -372,6 +375,182 @@ class AppointmentController extends Controller
         return response()->json([
             'refund' => $result['refund'],
             'payment_status' => $result['payment_status'],
+        ]);
+    }
+
+    /**
+     * POST /api/owner/appointments/{id}/balance/charge (05-api-contracts.md
+     * endpoint 6, D-0057). J5: owner-initiated only, same "explicit owner
+     * action, never system-triggered" pattern as refund() above — 04's
+     * schema has no studio-configured "auto-charge policy" field anywhere
+     * (checked directly: neither `tenants` nor `services` carries one), so
+     * J5's "if the studio's policy is auto-charge" branch describes a
+     * product-config knob that was never built; this endpoint is the
+     * explicit action a still-unbuilt "charge balance" button would call,
+     * matching endpoint 6's own contract shape (a dedicated POST action
+     * route, not an automatic side effect of updateStatus()'s
+     * confirmed -> completed transition).
+     *
+     * Eligibility, each checked against 04's real state machine/fields
+     * rather than assumed:
+     * - `appointments.status === 'completed'` — J5 point 1 ("owner marks
+     *   the appointment completed"); J4 point 4 is explicit that a no-show
+     *   never gets a balance charge attempt, and `pending_payment`/
+     *   `confirmed`/`cancelled` have no balance to collect yet or ever.
+     * - The deposit `payments` row must be `succeeded` — mirrors refund()'s
+     *   own reasoning; an appointment can reach `completed` with no
+     *   captured deposit only via bad data, but this is still checked
+     *   rather than assumed.
+     * - No existing `balance` payment already `succeeded`/`paid_manually`/
+     *   `processing` — prevents double-charging a balance that's already
+     *   settled or mid-flight. A prior `failed` balance payment does NOT
+     *   block a retry (declined once, owner tries again after the
+     *   customer updates their card) — failure is J5's own documented
+     *   expected, retriable outcome, not a terminal one.
+     *
+     * Balance amount: `payment_mandates.balance_amount_disclosed`, NOT
+     * `service.price_amount - deposit.amount` recomputed live. This is a
+     * deliberate choice, not an oversight — `balance_amount_disclosed` is
+     * 04's own field for "the exact remaining-balance figure disclosed at
+     * booking time" as part of the mandate the customer actually agreed
+     * to, and D-0006's context note is explicit that an off-session charge
+     * needs to match what the cardholder consented to at save time for the
+     * SCA/dispute-defense reasoning that table exists for. Recomputing
+     * from the service's CURRENT price would silently charge a different
+     * amount than was disclosed if the owner edited the service's price
+     * after this booking was made — exactly the drift the mandate snapshot
+     * exists to prevent.
+     *
+     * Payment-method mechanics: reuses `payment_mandates.
+     * stripe_payment_method_id` (D-0031's nullable-with-backfill column) —
+     * no new payment-method-saving plumbing needed. D-0006's `create()`
+     * already sets `setup_future_usage: off_session` on the deposit
+     * PaymentIntent and never creates a Stripe Customer object; Stripe's
+     * documented off-session-reuse-without-a-Customer pattern lets that
+     * same `payment_method` ID be confirmed again directly (see
+     * StripePaymentIntentGateway::chargeOffSession()'s own docblock). If
+     * that column is still null (D-0031's backfill genuinely never ran —
+     * R-07), there is nothing to charge against; this is a 409, not a
+     * 502, since no Stripe call is even attempted.
+     */
+    public function chargeBalance(Request $request, string $id): JsonResponse
+    {
+        $tenantId = (string) $request->attributes->get('tenant_id');
+
+        $lookup = TenantContext::run($tenantId, function () use ($id) {
+            $appointment = Appointment::query()->with('service')->find($id);
+
+            if ($appointment === null) {
+                return null;
+            }
+
+            $deposit = Payment::query()
+                ->where('appointment_id', $appointment->id)
+                ->where('type', 'deposit')
+                ->first();
+
+            $existingBalance = Payment::query()
+                ->where('appointment_id', $appointment->id)
+                ->where('type', 'balance')
+                ->first();
+
+            $mandate = PaymentMandate::query()->where('appointment_id', $appointment->id)->first();
+
+            $tenant = Tenant::query()->find($appointment->tenant_id);
+
+            return compact('appointment', 'deposit', 'existingBalance', 'mandate', 'tenant');
+        });
+
+        if ($lookup === null) {
+            return response()->json(['error' => 'NOT_FOUND'], 404);
+        }
+
+        ['appointment' => $appointment, 'deposit' => $deposit, 'existingBalance' => $existingBalance, 'mandate' => $mandate, 'tenant' => $tenant] = $lookup;
+
+        if ($appointment->status !== 'completed') {
+            return response()->json(['error' => 'INVALID_STATUS_TRANSITION'], 409);
+        }
+
+        if ($deposit === null || $deposit->status !== 'succeeded') {
+            return response()->json(['error' => 'DEPOSIT_NOT_CAPTURED'], 409);
+        }
+
+        if ($existingBalance !== null && in_array($existingBalance->status, ['succeeded', 'paid_manually', 'processing'], true)) {
+            return response()->json(['error' => 'BALANCE_ALREADY_SETTLED'], 409);
+        }
+
+        if ($mandate === null || $mandate->stripe_payment_method_id === null) {
+            return response()->json(['error' => 'PAYMENT_METHOD_NOT_AVAILABLE'], 409);
+        }
+
+        $balanceAmount = $mandate->balance_amount_disclosed;
+
+        if ($balanceAmount <= 0) {
+            return response()->json(['error' => 'NO_BALANCE_DUE'], 409);
+        }
+
+        $applicationFeeAmount = (int) round($balanceAmount * config('services.stripe.application_fee_bps') / 10000);
+
+        // D-0027's boundary, same as refund() — the Stripe call sits
+        // strictly outside any open transaction.
+        try {
+            $chargeResult = $this->paymentIntentGateway->chargeOffSession(
+                $mandate->stripe_payment_method_id,
+                $balanceAmount,
+                $deposit->currency,
+                $tenant->stripe_connect_account_id,
+                $applicationFeeAmount,
+                ['tenant_id' => $tenantId, 'appointment_id' => $appointment->id],
+            );
+        } catch (Throwable) {
+            return response()->json(['error' => 'PAYMENT_PROVIDER_UNAVAILABLE'], 502);
+        }
+
+        $payment = TenantContext::run($tenantId, function () use ($id, $request, $appointment, $deposit, $balanceAmount, $applicationFeeAmount, $chargeResult) {
+            $payment = Payment::query()->create([
+                'appointment_id' => $appointment->id,
+                'type' => 'balance',
+                'stripe_payment_intent_id' => $chargeResult->paymentIntentId,
+                'amount' => $balanceAmount,
+                'currency' => $deposit->currency,
+                'application_fee_amount' => $applicationFeeAmount,
+                'status' => $chargeResult->succeeded() ? 'succeeded' : 'failed',
+                'failure_code' => $chargeResult->failureCode,
+            ]);
+
+            // Same booking_events audit-trail pattern D-0053/D-0056 already
+            // use — a failed off-session charge is recorded too (not just
+            // successes), since J6's "collect in person" fallback and any
+            // later dispute both need to see that an attempt was made and
+            // why it didn't succeed.
+            BookingEvent::query()->create([
+                'appointment_id' => $id,
+                'actor_type' => 'owner',
+                'actor_id' => $request->user()->id,
+                'event_type' => $chargeResult->succeeded() ? 'balance_charge_succeeded' : 'balance_charge_failed',
+                'metadata' => [
+                    'payment_id' => $payment->id,
+                    'amount' => $balanceAmount,
+                    'failure_code' => $chargeResult->failureCode,
+                ],
+            ]);
+
+            return $payment;
+        });
+
+        if ($chargeResult->succeeded()) {
+            return response()->json(['status' => 'succeeded', 'payment_id' => $payment->id]);
+        }
+
+        // Deliberately 200, not 4xx/5xx — 05-api-contracts.md endpoint 6:
+        // a declined/authentication-required off-session charge is an
+        // expected, handled business outcome (J5), not a malformed request
+        // or a server error. fallback_action tells the frontend exactly
+        // which UI to show (J6) without inferring it from an HTTP status.
+        return response()->json([
+            'status' => 'failed',
+            'failure_code' => $chargeResult->failureCode,
+            'fallback_action' => 'mark_paid_manually',
         ]);
     }
 

@@ -2,6 +2,7 @@
 
 namespace Tests\Support;
 
+use App\Payments\OffSessionChargeResult;
 use App\Payments\PaymentIntentGateway;
 use App\Payments\PaymentIntentResult;
 use App\Payments\PaymentIntentStatus;
@@ -47,6 +48,10 @@ final class FakePaymentIntentGateway implements PaymentIntentGateway
         private readonly bool $shouldFailRefund = false,
         private readonly ?string $refundId = null,
         private readonly string $refundStatus = 'succeeded',
+        private readonly bool $shouldThrowOnChargeOffSession = false,
+        private readonly string $chargeOffSessionStatus = 'succeeded',
+        private readonly ?string $chargeOffSessionFailureCode = null,
+        private readonly ?string $chargeOffSessionPaymentIntentId = null,
     ) {}
 
     public function create(
@@ -117,5 +122,44 @@ final class FakePaymentIntentGateway implements PaymentIntentGateway
     public function refundCallCount(): int
     {
         return $this->refundCallCount;
+    }
+
+    private int $chargeOffSessionCallCount = 0;
+
+    /**
+     * D-0057: models the three real outcomes an off-session confirm can
+     * have — succeed, a genuine decline/auth-required failure (both
+     * reported via the returned OffSessionChargeResult, never an
+     * exception, matching StripePaymentIntentGateway's own CardException
+     * handling), or a provider-unavailable condition
+     * ($shouldThrowOnChargeOffSession, e.g. a network error) that the
+     * controller must still map to 502.
+     */
+    public function chargeOffSession(
+        string $paymentMethodId,
+        int $amountMinorUnits,
+        string $currency,
+        ?string $connectedAccountId,
+        int $applicationFeeAmountMinorUnits,
+        array $metadata,
+    ): OffSessionChargeResult {
+        $this->chargeOffSessionCallCount++;
+
+        if ($this->shouldThrowOnChargeOffSession) {
+            throw new RuntimeException('Simulated Stripe off-session-charge failure for D-0057 validation.');
+        }
+
+        $id = $this->chargeOffSessionPaymentIntentId ?? 'pi_fake_balance_'.substr(md5(serialize($metadata)), 0, 16);
+
+        return new OffSessionChargeResult(
+            $this->chargeOffSessionStatus,
+            $id,
+            $this->chargeOffSessionStatus === 'succeeded' ? null : $this->chargeOffSessionFailureCode,
+        );
+    }
+
+    public function chargeOffSessionCallCount(): int
+    {
+        return $this->chargeOffSessionCallCount;
     }
 }

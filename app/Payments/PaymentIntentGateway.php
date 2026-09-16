@@ -42,4 +42,34 @@ interface PaymentIntentGateway
      * which this app's owner-facing reason text has no reliable mapping to.
      */
     public function refund(string $paymentIntentId, int $amountMinorUnits, ?string $reason): RefundResult;
+
+    /**
+     * D-0057: the off-session balance charge (J5,
+     * Owner\AppointmentController::chargeBalance(), 05-api-contracts.md
+     * endpoint 6) — a NEW PaymentIntent confirmed immediately against a
+     * payment method already saved from the deposit (D-0006's
+     * `setup_future_usage: off_session`, never a `retrieve()`/`refund()`
+     * on the original deposit PaymentIntent). `$paymentMethodId` is
+     * `payment_mandates.stripe_payment_method_id` (D-0031's
+     * nullable-with-backfill column) — the caller must already have
+     * confirmed it is non-null. A card decline or an authentication
+     * requirement the customer isn't present to complete is an expected,
+     * handled business outcome (J5's own text), not an exception the
+     * caller needs a try/catch for — both are reported back via
+     * `OffSessionChargeResult::$status === 'failed'`. Only a genuine
+     * provider-unavailable condition (network failure, Stripe API outage,
+     * malformed request) should still throw, exactly like `create()`/
+     * `refund()` already do, mapped by the caller to `502
+     * PAYMENT_PROVIDER_UNAVAILABLE`.
+     *
+     * @param  array<string, string>  $metadata
+     */
+    public function chargeOffSession(
+        string $paymentMethodId,
+        int $amountMinorUnits,
+        string $currency,
+        ?string $connectedAccountId,
+        int $applicationFeeAmountMinorUnits,
+        array $metadata,
+    ): OffSessionChargeResult;
 }
