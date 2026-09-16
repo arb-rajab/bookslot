@@ -21,6 +21,16 @@ use Illuminate\Queue\SerializesModels;
  * TenantScopedJob) is the unit of async work; queuing the mail a second
  * time here would be redundant and would lose this job's own tenant-context
  * middleware for the actual send.
+ *
+ * D-0059: also covers `purpose = 'rebooking_invite'` (FR-23/D-0014) — the
+ * manual owner-triggered re-invite send explicitly reuses "the same
+ * notification-sending infrastructure as reminders" per
+ * 05-api-contracts.md endpoint 9's own contract text, rather than a
+ * parallel Mailable/job pair. SendAppointmentReminderJob's own send/mark-
+ * sent/retry/tenant-context logic is entirely purpose-agnostic already
+ * (it only ever reads $delivery->status); only this Mailable's subject/
+ * content need a purpose-specific branch, the same way subjectFor()
+ * already branches per reminder offset.
  */
 class AppointmentReminderMail extends Mailable
 {
@@ -35,6 +45,17 @@ class AppointmentReminderMail extends Mailable
 
     public function content(): Content
     {
+        if ($this->delivery->purpose === 'rebooking_invite') {
+            return new Content(
+                view: 'emails.rebooking-invite',
+                with: [
+                    'tenantName' => $this->delivery->tenant->name,
+                    'customerName' => $this->delivery->appointment->customer->name,
+                    'bookingUrl' => config('booking.public_booking_base_url').'/tenants/'.$this->delivery->tenant->slug,
+                ],
+            );
+        }
+
         return new Content(
             view: 'emails.appointment-reminder',
             with: [
@@ -51,6 +72,7 @@ class AppointmentReminderMail extends Mailable
             'reminder_7d' => 'Your upcoming appointment — one week to go',
             'reminder_24h' => 'Reminder: your appointment is tomorrow',
             'reminder_2h' => 'Reminder: your appointment is in 2 hours',
+            'rebooking_invite' => 'We\'d love to see you again',
             default => 'Appointment reminder',
         };
     }

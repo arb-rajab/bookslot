@@ -121,6 +121,13 @@ Route::prefix('owner')
         // because they call Stripe mid-request.
         Route::get('customers/{id}/export', [OwnerCustomerController::class, 'export']);
         Route::post('customers/{id}/erasure', [OwnerCustomerController::class, 'erase']);
+
+        // FR-23/D-0014/D-0023/D-0060: no external call mid-request (no
+        // Stripe, no other outbound dependency) — stays on plain
+        // `auth.tenant`, unlike refund/balance-charge/Connect below, which
+        // all needed `auth.tenant.external` specifically because they call
+        // Stripe.
+        Route::post('customers/{id}/re-invite', [OwnerCustomerController::class, 'reinvite']);
     });
 
 // D-0056 (docs/project-memory/09-decision-log.md, amends D-0027 to a second

@@ -583,6 +583,17 @@ same column. Migration:
 
 - Index: `(tenant_id, appointment_id, purpose)`; `(scheduled_for, status)` for
   the queue worker picking up due notifications.
+- **Amendment (Session 30, D-0060):** the `(tenant_id, appointment_id,
+  purpose)` unique index (added Session 19/D-0050 for reminders' fire-once
+  guarantee) is now a **partial** unique index, `WHERE purpose <>
+  'rebooking_invite'`. FR-23's manual re-invite action is deliberately
+  repeatable at the owner's own discretion (each call is a real, new send,
+  not a state set once) — the original full unique index would turn a
+  second re-invite click into an unhandled `23505` violation. Every other
+  purpose (`reminder_7d/24h/2h`, and the still-unbuilt automatic
+  `rebooking_prompt`, which *does* need to stay fire-once per J10) keeps
+  the original one-row-per-appointment-per-purpose guarantee unchanged.
+  Migration: `2026_09_16_000023_make_rebooking_invite_repeatable_in_notification_deliveries.php`.
 
 ## Booking state machine (`appointments.status`)
 

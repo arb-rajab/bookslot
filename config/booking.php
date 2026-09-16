@@ -112,4 +112,22 @@ return [
 
     'reminder_dispatch_window_minutes' => (int) env('BOOKING_REMINDER_DISPATCH_WINDOW_MINUTES', 15),
 
+    /*
+    |--------------------------------------------------------------------------
+    | Public booking page base URL
+    |--------------------------------------------------------------------------
+    |
+    | FR-23/D-0014/D-0059: the manual re-invite email (05-api-contracts.md
+    | endpoint 9) links a customer back to their tenant's public booking
+    | page (frontend/app/pages/tenants/[slug]/index.vue), the same page
+    | D-0041 already built. Same FRONTEND_URLS-first-entry pattern
+    | config/services.php's stripe.connect_onboarding_redirect_url already
+    | uses, kept as its own key here (rather than a shared helper) since the
+    | two serve genuinely different pages and this project's stated
+    | preference is not to force an abstraction over two similar lines.
+    |
+    */
+
+    'public_booking_base_url' => rtrim(explode(',', env('FRONTEND_URLS', 'http://localhost:3000'))[0], '/'),
+
 ];

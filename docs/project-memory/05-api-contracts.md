@@ -522,7 +522,7 @@ creation, so an update that doesn't touch buffer leaves the service's
 existing values unchanged. A buffer value that *is* provided on update is
 validated by the same bounds as creation.
 
-### 9. `POST /api/owner/customers/{id}/re-invite` — detailed Session 6, per D-0014/FR-23
+### 9. `POST /api/owner/customers/{id}/re-invite` — detailed Session 6, per D-0014/FR-23; **built Session 30, D-0060**
 
 **Request:** `{}` — no configurable fields at MVP; the action itself (send
 this specific customer a link back to the public booking page) is the
@@ -534,7 +534,9 @@ for asynchronous delivery via the same notification-sending
 infrastructure as reminders, sent immediately rather than on a schedule.
 
 **Errors:** `404` unknown `customer_id` (tenant-scoped, per the owner's own
-tenant).
+tenant); also `404` in the defensive (not reachable in practice per
+`Owner\CustomerController::reinvite()`'s own docblock) case of a customer
+with zero appointments at all.
 
 **Resolved, Session 7 (D-0023):** `04-data-model.md`'s
 `notification_deliveries.purpose` CHECK list now includes `rebooking_invite`
@@ -542,6 +544,28 @@ as its own distinct value (separate from the automatic `rebooking_prompt`),
 closing the gap this endpoint's original definition (Session 6) flagged but
 didn't fix. This endpoint's send is recorded with `purpose =
 'rebooking_invite'`.
+
+**Built, Session 30 (D-0060):** `Owner\CustomerController::reinvite()`,
+behind plain `auth.tenant`/`role:owner` (no Stripe or other external call
+mid-request, so D-0027's transaction-boundary concern doesn't apply — this
+route stays inside the `owner` prefix group, unlike refund/balance-charge/
+Connect). Reuses `SendAppointmentReminderJob`/`AppointmentReminderMail`
+directly ("the same notification-sending infrastructure as reminders,"
+per this endpoint's own contract text above) rather than a parallel job/
+mailable pair — the job's send/mark-sent/retry/tenant-context logic is
+already purpose-agnostic; only the Mailable's subject/content gained a
+`rebooking_invite` branch. The `{id}` targets a customer, not an
+appointment; since `notification_deliveries.appointment_id` is `NOT NULL`,
+the send is attached to that customer's own most recent appointment (by
+`starts_at`). **Repeatable by design, not deduplicated:** each call
+creates a brand-new `notification_deliveries`/`booking_events` row and
+sends a new email — matching FR-23's "at their own discretion" framing (a
+real resend action, unlike refund/status-update's one-shot idempotency).
+This required narrowing `notification_deliveries_tenant_appointment_
+purpose_unique` (D-0050) to a partial index excluding `rebooking_invite` —
+see D-0060 for the full reasoning; the fire-once guarantee that unique
+index still gives every other purpose (reminders, and the still-unbuilt
+automatic `rebooking_prompt`) is unchanged.
 
 ### 10. `POST /api/owner/stripe/connect/onboarding-link` / `GET /api/owner/stripe/connect/status` — built Session 28, D-0058
 

@@ -81,6 +81,20 @@ test that fails if it regresses — not merely coded and assumed correct.
       frontend page or Playwright spec names a refund button as in scope;
       the existing appointment-detail page's cancel-button copy explicitly
       still calls a deposit refund "a separate, not-yet-built capability."
+- [x] **Owner-initiated customer re-invite** (FR-23/D-0014, `05`'s endpoint
+      9 — already specified since Sessions 5-7, just never built) —
+      `POST /api/owner/customers/{id}/re-invite` (D-0060, Session 30): a
+      manual, owner-triggered resend of the public-booking-page link to a
+      specific customer, independent of whether their last appointment was
+      a no-show, reusing `SendAppointmentReminderJob`/
+      `AppointmentReminderMail` directly rather than parallel
+      infrastructure. Deliberately repeatable — each call is a real, new
+      send, never deduplicated against a prior one (the opposite of
+      refund/status-update's one-shot shape) — which required narrowing
+      D-0050's reminder fire-once unique index to a partial index excluding
+      this one purpose. No owner-admin UI trigger built this session, same
+      scoping as D-0056/D-0057/D-0058 — `05-api-contracts.md` documents
+      only the API contract.
 - [x] **Owner-initiated off-session balance charge** (J5, `05`'s endpoint 6,
       the item named unbuilt below through Session 26) — `POST /api/owner/
       appointments/{id}/balance/charge` (D-0057, Session 27): a real
