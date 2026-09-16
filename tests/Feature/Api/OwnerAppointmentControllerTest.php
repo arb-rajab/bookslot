@@ -266,6 +266,19 @@ test('an owner cancels a confirmed appointment, freeing the slot with no Stripe/
     $response->assertOk();
     $response->assertJson(['status' => 'cancelled']);
 
+    // Regression guard, found by real-browser E2E coverage (R-08), not by
+    // this file: the frontend's appointment-detail page
+    // (frontend/app/pages/owner/appointments/[id].vue) assigns whatever
+    // this endpoint returns straight onto its `detail` state and its
+    // template unconditionally reads `detail.payments.length` (etc.) — a
+    // response missing `payments`/`reminders`/`events` doesn't just render
+    // a thinner page, it throws and crashes the page entirely, silently,
+    // right after a real owner click. cancel() must return the same full
+    // detail shape show() does, not the slim list-row shape updateStatus()
+    // correctly still uses (that response only ever feeds the appointments
+    // *list* page, which never reads those keys).
+    $response->assertJsonStructure(['payments', 'reminders', 'events', 'cancelled_by', 'cancelled_reason', 'cancelled_at']);
+
     TenantContext::run($tenant->id, function () use ($appointment) {
         $fresh = Appointment::find($appointment->id);
         expect($fresh->status)->toBe('cancelled');

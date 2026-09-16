@@ -234,3 +234,57 @@ of preference:
   automatically if not already running, but reuses existing ones locally
   — check `reuseExistingServer` in `playwright.config.ts` before assuming
   a fresh run is needed).
+
+## Session 23 additions — Playwright E2E gotchas for owner-admin flows specifically
+
+- **A fresh container may have no `.env` file at all, not just a stale
+  one.** Session 21/22 documented what to do once `.env` exists and is
+  pointed at the wrong database; Session 23's container had no `.env` at
+  all (`ls .env` → "No such file or directory"). `cp .env.example .env`
+  gives you the right defaults already (`DB_DATABASE=bookslot`, correct
+  role names) — just remember to run `php artisan key:generate --force`
+  immediately after, and again after any subsequent `cp .env.example .env`
+  (copying over `.env` wipes `APP_KEY` back to empty every time).
+- **Playwright spec/support files run as real ES modules — `__dirname` is
+  not defined and throws `ReferenceError` at import time**, not just when
+  used. If a spec/support file needs its own directory (e.g. to shell out
+  to a sibling script with a repo-relative path), use
+  `path.dirname(fileURLToPath(import.meta.url))` instead. This fails at
+  collection time, before any test runs, so it can look like every test in
+  the file mysteriously vanished rather than a stack trace pointing at the
+  real line.
+- **Triggering a real *delayed* background job (e.g. `ReleaseExpiredPendingBookingJob`,
+  FR-05's hold-window expiry) from a Playwright E2E test without actually
+  waiting out its real delay (15 real minutes by default) or standing up
+  RabbitMQ's delayed-message plumbing inside the test itself:** shell out
+  to `php artisan tinker <script.php>` (via Node's `execFileSync`, `cwd`
+  set to the repo root) running a small PHP script that backdates the
+  target row's `created_at` and calls the job's own `dispatchSync()` —
+  the exact same technique the equivalent Pest Feature test already uses,
+  replayed against the real dev database the E2E-driven `php artisan
+  serve` process is actually reading. Pass identifiers via an environment
+  variable (`E2E_APPOINTMENT_ID=... php artisan tinker ...`), not `argv` —
+  `artisan tinker <file>` does not forward extra CLI arguments into the
+  executed script. See `frontend/tests/e2e/support/expire-hold-window.php`
+  and `support/booking.ts`'s `expireHoldWindow()` for the working example.
+  This is a test-harness technique only — it must never become a reachable
+  HTTP route (would blur J4's no-automatic-no-show-detection boundary) and
+  must never be treated as a substitute for `RabbitMqQueueIntegrationTest`
+  (`queue-broker` group), which is what actually proves the real delayed
+  dispatch works.
+- **A frontend page that assigns an API response's shape directly onto its
+  own state (e.g. `detail.value = await apiFetch(...)`) is only as safe as
+  every endpoint that can produce that response returning the SAME shape.**
+  `Owner\AppointmentController::cancel()` and `show()` feed the exact same
+  `frontend/app/pages/owner/appointments/[id].vue` page, but only `show()`
+  originally built the full `payments`/`reminders`/`events`-bearing detail
+  object — `cancel()` returned the slim list-row shape `index()`/
+  `updateStatus()` correctly use elsewhere, and the page's own template
+  unconditionally reads `detail.payments.length`, crashing on `undefined`
+  the instant a real owner clicked "Cancel appointment." No Feature test
+  caught this (it only asserted the JSON body's own fields, never how a
+  Vue template already showing the fuller shape would react to a thinner
+  one replacing it) — only a real Playwright click did. When one backend
+  endpoint's response feeds a frontend state slot another, richer endpoint
+  also feeds, grep for every consumer of that state slot before trusting a
+  narrower response shape is safe to return from a new or changed action.
