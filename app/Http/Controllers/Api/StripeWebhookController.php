@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Jobs\ProcessStripeWebhookJob;
+use App\Jobs\ResolveStripeDisputeTenantJob;
 use App\Models\StripeWebhookEvent;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -64,26 +65,34 @@ class StripeWebhookController extends Controller
             return response()->json(['status' => 'already_processed']);
         }
 
-        if (! is_string($tenantId) || $tenantId === '') {
-            // D-0048: recorded for audit/ops visibility (this table is
-            // deliberately tenant-less — see StripeWebhookEvent's
-            // docblock), but no tenant-scoped job can be dispatched without
-            // a tenant context to run it in. Real, deliberately deferred
-            // gap, not silently swallowed: an event type whose payload
-            // never carries our own metadata.tenant_id (e.g.
-            // charge.dispute.created's Dispute object, which does not
-            // inherit the originating charge's metadata) has no per-tenant
-            // handling in this codebase yet.
-            Log::warning('Stripe webhook event recorded with no resolvable tenant_id — not dispatched for processing', [
-                'stripe_event_id' => $event->id,
-                'type' => $event->type,
-            ]);
+        if (is_string($tenantId) && $tenantId !== '') {
+            ProcessStripeWebhookJob::dispatch($tenantId, $event->id);
 
-            return response()->json(['status' => 'recorded_unresolved_tenant']);
+            return response()->json(['status' => 'accepted']);
         }
 
-        ProcessStripeWebhookJob::dispatch($tenantId, $event->id);
+        // D-0048: charge.dispute.created/closed's Dispute object never
+        // carries metadata.tenant_id (Stripe does not copy a charge's
+        // metadata onto disputes raised against it) — resolve the tenant
+        // asynchronously instead of giving up, per
+        // ResolveStripeDisputeTenantJob's own docblock. Recorded here, not
+        // resolved synchronously: fan-out DB lookups across tenants have no
+        // place in a fast-ack webhook request (J9).
+        if (in_array($event->type, ['charge.dispute.created', 'charge.dispute.closed'], true)) {
+            ResolveStripeDisputeTenantJob::dispatch($event->id);
 
-        return response()->json(['status' => 'accepted']);
+            return response()->json(['status' => 'accepted']);
+        }
+
+        // Recorded for audit/ops visibility (this table is deliberately
+        // tenant-less — see StripeWebhookEvent's docblock), but no
+        // tenant-scoped job can be dispatched without a tenant context to
+        // run it in, and no resolution path exists for this event type.
+        Log::warning('Stripe webhook event recorded with no resolvable tenant_id — not dispatched for processing', [
+            'stripe_event_id' => $event->id,
+            'type' => $event->type,
+        ]);
+
+        return response()->json(['status' => 'recorded_unresolved_tenant']);
     }
 }

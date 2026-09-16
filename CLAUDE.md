@@ -68,7 +68,18 @@ BYPASSRLS CREATEDB` and `CREATE ROLE bookslot_app ...` (passwords from
 bookslot` and `... bookslot_test`, THEN the grants block above, THEN
 `php artisan migrate:fresh --seed --database=pgsql_migrator`. Session 20's
 note above reads like the roles/DBs already exist; Session 21 found they
-don't, on a genuinely fresh container.
+don't, on a genuinely fresh container. Session 22: confirmed the container
+is fresh again every session — don't assume Session 21's setup persisted.
+
+**Run `createdb`/`psql` as the `postgres` OS user directly
+(`sudo -u postgres createdb -O bookslot_migrator bookslot`), never with
+`-h 127.0.0.1 -U postgres`.** This sandbox's Postgres has no trust/password
+configured for TCP host connections as the `postgres` superuser — a `-h
+127.0.0.1 -U postgres` invocation hangs silently retrying a `Password:`
+prompt forever (no TTY to answer it) rather than failing fast, and will
+eat your command's timeout doing it. `sudo -u postgres <command>` uses the
+local peer-auth socket instead and returns immediately. This cost Session
+22 a stuck background command that had to be killed.
 
 **`apt-get install rabbitmq-server` does NOT leave it running** — the
 package's own postinst prints `policy-rc.d denied execution of start`
@@ -181,10 +192,31 @@ of preference:
 
 ## Test suite shape — don't run more than you need
 
+- **`composer test:fast` (`pest --exclude-group=slow,queue-broker`) does
+  NOT actually exclude `queue-broker` right now — verified directly
+  (Session 22).** No test in this repo currently carries a `slow` tag
+  (`./vendor/bin/pest --group=slow` finds zero tests) — combining that
+  nonexistent group name with the real `queue-broker` one in a single
+  `--exclude-group=a,b` silently makes the *entire* exclusion a no-op in
+  this Pest/PHPUnit version, and all 3 `queue-broker` RabbitMQ-integration
+  tests run anyway. This means `composer test:fast`/`composer ci:check`
+  require a real local RabbitMQ broker to pass at all right now, contrary
+  to what this file and `07-testing-strategy.md` otherwise say about that
+  group being excluded from the fast gate. Two ways to actually get the
+  fast, broker-free gate this script is supposed to give you: run
+  `./vendor/bin/pest --exclude-group=queue-broker` directly (drop the
+  nonexistent `slow`), or just stand up RabbitMQ anyway (this file's own
+  section below) since Session 19 already made it necessary for other
+  reasons. The real fix — adding a `slow` tag to at least one real test, or
+  changing `composer.json`'s `test:fast` script to stop naming a group that
+  doesn't exist — was not made this session (out of D-0048's own scope);
+  flagged here so it isn't rediscovered by hand-tracing a config file
+  again.
 - The fast backend gate (`composer test:fast` / `php artisan test
-  --testsuite=Feature,TenantIsolation`) is ~135 tests, ~15 seconds against
-  a real local Postgres. Cheap enough to run whole after any backend
-  change — no need to hand-pick files once you're done iterating.
+  --testsuite=Feature,TenantIsolation`) is ~135-146 tests, ~10-16 seconds
+  against a real local Postgres (with the broker caveat immediately
+  above). Cheap enough to run whole after any backend change — no need to
+  hand-pick files once you're done iterating.
 - While iterating on ONE new endpoint, run just that file:
   `./vendor/bin/pest tests/Feature/Api/YourNewControllerTest.php` — much
   faster feedback than the whole suite, and this repo's Pest tests are

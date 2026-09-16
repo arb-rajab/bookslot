@@ -526,7 +526,14 @@ assumes real Postgres, full stop.
   test-mode refund in the slow tier.
 - **Disputes:** `charge.dispute.created`/`closed` webhook handling — assert
   a `booking_events` audit entry is created and nothing else auto-mutates
-  (per `05`, disputes are tracked, not auto-resolved).
+  (per `05`, disputes are tracked, not auto-resolved). Built and tested
+  Session 22 (D-0053, `tests/Feature/Api/StripeWebhookControllerTest.php`):
+  correct tenant resolution via the Dispute's own `payment_intent` field,
+  proven across two tenants so only the correct one is touched; the
+  orphaned/edge-case failure path (a `payment_intent` matching no known
+  payment in any tenant, and a dispute carrying no `payment_intent` at
+  all) both leave the event genuinely unprocessed rather than silently
+  misattributed.
 
 **What genuinely cannot be tested automatically — a manual pre-launch
 checklist, not a gap in the automated suite:**

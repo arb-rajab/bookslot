@@ -1,5 +1,7 @@
 <?php
 
+use App\Models\Appointment;
+use App\Models\BookingEvent;
 use App\Models\Payment;
 use App\Models\PaymentMandate;
 use App\Models\StripeWebhookEvent;
@@ -32,6 +34,30 @@ function paymentIntentEventPayload(string $type, string $paymentIntentId, string
                 'status' => $type === 'payment_intent.succeeded' ? 'succeeded' : 'requires_payment_method',
                 'payment_method' => 'pm_fake_webhook_backfilled',
                 'metadata' => ['tenant_id' => $tenantId, 'appointment_id' => $appointmentId],
+            ], $objectOverrides),
+        ],
+    ], JSON_THROW_ON_ERROR);
+}
+
+// A real Stripe Dispute object (`data.object` on charge.dispute.created/
+// closed) carries `charge` and `payment_intent` as its own top-level
+// fields — it is a distinct Stripe object from the Charge/PaymentIntent it
+// was raised against, and never inherits either's `metadata` (D-0048's own
+// named gap this test file's dispute cases exist to close).
+function disputeEventPayload(string $type, ?string $paymentIntentId, string $chargeId, array $objectOverrides = []): string
+{
+    return json_encode([
+        'id' => 'evt_'.bin2hex(random_bytes(8)),
+        'type' => $type,
+        'data' => [
+            'object' => array_merge([
+                'id' => 'dp_'.bin2hex(random_bytes(8)),
+                'object' => 'dispute',
+                'charge' => $chargeId,
+                'payment_intent' => $paymentIntentId,
+                'amount' => 5000,
+                'reason' => 'general',
+                'status' => $type === 'charge.dispute.created' ? 'needs_response' : 'won',
             ], $objectOverrides),
         ],
     ], JSON_THROW_ON_ERROR);
@@ -176,18 +202,96 @@ test('payment_intent.payment_failed marks the deposit failed without touching th
     });
 });
 
-test('an event whose payload carries no resolvable tenant_id is recorded but not dispatched for processing', function () {
+test('an event type with neither a metadata.tenant_id nor a dispute resolution path is recorded but not dispatched for processing', function () {
     $payload = json_encode([
         'id' => 'evt_no_tenant_'.bin2hex(random_bytes(8)),
-        'type' => 'charge.dispute.created',
-        'data' => ['object' => ['id' => 'dp_test_1', 'object' => 'dispute', 'charge' => 'ch_test_1']],
+        'type' => 'charge.refunded',
+        'data' => ['object' => ['id' => 'ch_test_1', 'object' => 'charge']],
     ], JSON_THROW_ON_ERROR);
 
     $response = postRawSignedWebhook($payload);
 
     $response->assertOk();
     $response->assertJson(['status' => 'recorded_unresolved_tenant']);
-    expect(StripeWebhookEvent::query()->where('type', 'charge.dispute.created')->count())->toBe(1);
+
+    $event = StripeWebhookEvent::query()->where('type', 'charge.refunded')->firstOrFail();
+    expect($event->processed_at)->toBeNull();
+});
+
+test('D-0048: a charge.dispute.created webhook resolves its tenant via the disputed PaymentIntent and records a booking_events audit entry, touching only the correct tenant', function (string $eventType, string $expectedEventType) {
+    $tenantA = Tenant::factory()->create();
+    $tenantB = Tenant::factory()->create();
+
+    $appointmentA = BookingFixture::appointmentFor($tenantA, ['status' => 'confirmed']);
+    $appointmentB = BookingFixture::appointmentFor($tenantB, ['status' => 'confirmed']);
+
+    BookingFixture::depositPaymentFor($tenantA, $appointmentA, ['stripe_payment_intent_id' => 'pi_dispute_tenant_a', 'status' => 'succeeded']);
+    $paymentB = BookingFixture::depositPaymentFor($tenantB, $appointmentB, ['stripe_payment_intent_id' => 'pi_dispute_tenant_b', 'status' => 'succeeded']);
+
+    $payload = disputeEventPayload($eventType, 'pi_dispute_tenant_b', 'ch_dispute_tenant_b');
+
+    $response = postRawSignedWebhook($payload);
+
+    $response->assertOk();
+    $response->assertJson(['status' => 'accepted']);
+
+    TenantContext::run($tenantB->id, function () use ($appointmentB, $paymentB, $expectedEventType) {
+        $bookingEvent = BookingEvent::query()->where('appointment_id', $appointmentB->id)->where('event_type', $expectedEventType)->firstOrFail();
+
+        expect($bookingEvent->actor_type)->toBe('webhook');
+        expect($bookingEvent->actor_id)->toBeNull();
+        expect($bookingEvent->from_status)->toBeNull();
+        expect($bookingEvent->to_status)->toBeNull();
+        expect($bookingEvent->metadata['stripe_payment_intent_id'])->toBe('pi_dispute_tenant_b');
+        expect($bookingEvent->metadata['stripe_charge_id'])->toBe('ch_dispute_tenant_b');
+
+        // A dispute is tracked, never auto-resolved (05-api-contracts.md) —
+        // and never a path to J4-style automatic no-show inference.
+        expect(Payment::query()->find($paymentB->id)->status)->toBe('succeeded');
+        expect(Appointment::query()->find($appointmentB->id)->status)->toBe('confirmed');
+    });
+
+    TenantContext::run($tenantA->id, function () use ($appointmentA) {
+        expect(BookingEvent::query()->where('appointment_id', $appointmentA->id)->count())->toBe(0);
+    });
+})->with([
+    'created' => ['charge.dispute.created', 'dispute_created'],
+    'closed' => ['charge.dispute.closed', 'dispute_closed'],
+]);
+
+test('D-0048: a dispute webhook for a payment_intent matching no known payment in any tenant is recorded but resolves to no tenant', function () {
+    // A real tenant with a real payment exists, so the per-tenant scan
+    // genuinely has something to search through and correctly find
+    // nothing in, not merely an empty Tenant table making failure trivial.
+    $tenant = Tenant::factory()->create();
+    $appointment = BookingFixture::appointmentFor($tenant, ['status' => 'confirmed']);
+    BookingFixture::depositPaymentFor($tenant, $appointment, ['stripe_payment_intent_id' => 'pi_unrelated', 'status' => 'succeeded']);
+
+    $payload = disputeEventPayload('charge.dispute.created', 'pi_orphaned_no_such_payment', 'ch_orphaned_no_such_payment');
+
+    $response = postRawSignedWebhook($payload);
+
+    $response->assertOk();
+    $response->assertJson(['status' => 'accepted']);
+
+    $event = StripeWebhookEvent::query()->where('type', 'charge.dispute.created')->firstOrFail();
+    expect($event->processed_at)->toBeNull();
+
+    TenantContext::run($tenant->id, function () use ($appointment) {
+        expect(BookingEvent::query()->where('appointment_id', $appointment->id)->count())->toBe(0);
+    });
+});
+
+test('D-0048: a dispute webhook carrying no payment_intent at all is recorded but resolves to no tenant', function () {
+    $payload = disputeEventPayload('charge.dispute.created', null, 'ch_no_payment_intent');
+
+    $response = postRawSignedWebhook($payload);
+
+    $response->assertOk();
+    $response->assertJson(['status' => 'accepted']);
+
+    $event = StripeWebhookEvent::query()->where('type', 'charge.dispute.created')->firstOrFail();
+    expect($event->processed_at)->toBeNull();
 });
 
 test('tenant A\'s webhook event never touches tenant B\'s appointment, even with the same PaymentIntent-shaped payload structure', function () {

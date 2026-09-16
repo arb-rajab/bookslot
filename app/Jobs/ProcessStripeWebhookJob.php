@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Models\Appointment;
+use App\Models\BookingEvent;
 use App\Models\Payment;
 use App\Models\PaymentMandate;
 use App\Models\StripeWebhookEvent;
@@ -37,6 +38,13 @@ use Throwable;
  * ourselves authored, not an arbitrary client-supplied value) — see
  * StripeWebhookController for where that metadata is actually read and
  * turned into this job's constructor argument.
+ *
+ * `charge.dispute.created`/`charge.dispute.closed` are the one exception:
+ * their tenant_id is resolved separately, by ResolveStripeDisputeTenantJob
+ * (see that job's own docblock for why disputes have no metadata.tenant_id
+ * at all), which dispatches this same job once it finds a match — by the
+ * time handleChargeDispute() below runs, tenant context is already
+ * established exactly the same way as every other branch here.
  */
 class ProcessStripeWebhookJob extends TenantScopedJob
 {
@@ -61,6 +69,7 @@ class ProcessStripeWebhookJob extends TenantScopedJob
             match ($event->type) {
                 'payment_intent.succeeded' => $this->handlePaymentIntentSucceeded($event->payload),
                 'payment_intent.payment_failed' => $this->handlePaymentIntentFailed($event->payload),
+                'charge.dispute.created', 'charge.dispute.closed' => $this->handleChargeDispute($event->type, $event->payload),
                 default => Log::info('Stripe webhook event type recorded but not handled', ['type' => $event->type, 'stripe_event_id' => $this->stripeEventId]),
             };
         } catch (Throwable $e) {
@@ -137,5 +146,57 @@ class ProcessStripeWebhookJob extends TenantScopedJob
         $payment->status = 'failed';
         $payment->failure_code = $failureCode;
         $payment->save();
+    }
+
+    /**
+     * D-0048: 05-api-contracts.md's own documented target for these two
+     * event types — a `booking_events` audit entry (dispute evidence per
+     * 06-security-threat-model.md), and nothing else. A dispute is tracked,
+     * never auto-resolved: no appointment/payment status is mutated here,
+     * and this must never grow into one (J4 stays out of scope — a dispute
+     * is not a no-show, and nothing here infers one).
+     *
+     * @param  array<string, mixed>  $payload
+     */
+    private function handleChargeDispute(string $eventType, array $payload): void
+    {
+        $object = $payload['data']['object'];
+        $paymentIntentId = is_string($object['payment_intent'] ?? null) ? $object['payment_intent'] : null;
+
+        $payment = $paymentIntentId !== null
+            ? Payment::query()->where('stripe_payment_intent_id', $paymentIntentId)->first()
+            : null;
+
+        if ($payment === null) {
+            // Resolved to this tenant by ResolveStripeDisputeTenantJob a
+            // moment ago, yet the Payment row is gone now (e.g. deleted
+            // between resolution and processing) — vanishingly unlikely
+            // given this codebase never deletes payments, but logged
+            // rather than silently dropped.
+            Log::warning('Dispute webhook event resolved a tenant but its payment_intent no longer matches a payment', [
+                'stripe_event_id' => $this->stripeEventId,
+                'type' => $eventType,
+                'stripe_payment_intent_id' => $paymentIntentId,
+            ]);
+
+            return;
+        }
+
+        BookingEvent::query()->create([
+            'appointment_id' => $payment->appointment_id,
+            'actor_type' => 'webhook',
+            'actor_id' => null,
+            'event_type' => $eventType === 'charge.dispute.created' ? 'dispute_created' : 'dispute_closed',
+            'from_status' => null,
+            'to_status' => null,
+            'metadata' => [
+                'stripe_dispute_id' => $object['id'] ?? null,
+                'stripe_charge_id' => $object['charge'] ?? null,
+                'stripe_payment_intent_id' => $paymentIntentId,
+                'reason' => $object['reason'] ?? null,
+                'status' => $object['status'] ?? null,
+                'amount' => $object['amount'] ?? null,
+            ],
+        ]);
     }
 }
