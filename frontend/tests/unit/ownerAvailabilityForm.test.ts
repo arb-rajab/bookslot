@@ -4,6 +4,7 @@ import type { AddressInfo } from 'node:net'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import OwnerAvailabilityPage from '~/pages/owner/availability/index.vue'
+import { flushUntil } from './support/waitFor'
 
 /**
  * Companion to ownerServicesForm.test.ts — covers the other two owner-admin
@@ -54,7 +55,7 @@ describe('owner/availability/index.vue', () => {
     }
 
     const wrapper = await mountSuspended(OwnerAvailabilityPage)
-    await new Promise((resolve) => setTimeout(resolve, 20))
+    await flushUntil(() => wrapper.find('.add-staff input').exists())
 
     await wrapper.find('.add-staff input').setValue('  ')
     await wrapper.find('.add-staff').trigger('submit.prevent')
@@ -62,7 +63,7 @@ describe('owner/availability/index.vue', () => {
     // fill something non-blank so the request actually fires.
     await wrapper.find('.add-staff input').setValue('New Staff')
     await wrapper.find('.add-staff').trigger('submit.prevent')
-    await new Promise((resolve) => setTimeout(resolve, 50))
+    await flushUntil(() => wrapper.text().includes('The display name field is required.'))
 
     expect(wrapper.text()).toContain('The display name field is required.')
   })
@@ -86,13 +87,16 @@ describe('owner/availability/index.vue', () => {
     routes[`/api/owner/staff/${staffId}/availability-exceptions`] = () => ({ status: 200, body: { availability_exceptions: [] } })
 
     const wrapper = await mountSuspended(OwnerAvailabilityPage)
-    await new Promise((resolve) => setTimeout(resolve, 50))
+    await flushUntil(() => wrapper.findAll('.day-row').some((row) => row.text().includes('Monday')))
 
     const mondayRow = wrapper.findAll('.day-row').find((row) => row.text().includes('Monday'))!
     await mondayRow.find('input[type="checkbox"]').setValue(true)
     const saveButton = wrapper.findAll('button').find((b) => b.text().includes('Save working hours'))!
     await saveButton.trigger('click')
-    await new Promise((resolve) => setTimeout(resolve, 50))
+    await flushUntil(() => {
+      const row = wrapper.findAll('.day-row').find((r) => r.text().includes('Monday'))
+      return !!row && row.text().includes('The end time must be after start time.')
+    })
 
     const updatedMondayRow = wrapper.findAll('.day-row').find((row) => row.text().includes('Monday'))!
     expect(updatedMondayRow.text()).toContain('The end time must be after start time.')

@@ -4,6 +4,7 @@ import type { AddressInfo } from 'node:net'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import OwnerServicesPage from '~/pages/owner/services/index.vue'
+import { flushUntil } from './support/waitFor'
 
 /**
  * Session 32's audit found every owner-admin form discarding the backend's
@@ -63,11 +64,11 @@ describe('owner/services/index.vue', () => {
     }
 
     const wrapper = await mountSuspended(OwnerServicesPage)
-    await new Promise((resolve) => setTimeout(resolve, 20))
+    await flushUntil(() => wrapper.find('button[type="button"]').exists())
 
     await wrapper.find('button[type="button"]').trigger('click') // "Add service"
     await wrapper.find('form.modal').trigger('submit.prevent')
-    await new Promise((resolve) => setTimeout(resolve, 50))
+    await flushUntil(() => wrapper.text().includes('Please check the highlighted fields.'))
 
     expect(wrapper.text()).toContain('Please check the highlighted fields.')
     expect(wrapper.text()).toContain('The name field is required.')
@@ -88,15 +89,15 @@ describe('owner/services/index.vue', () => {
     }
 
     const wrapper = await mountSuspended(OwnerServicesPage)
-    await new Promise((resolve) => setTimeout(resolve, 20))
+    await flushUntil(() => wrapper.find('button[type="button"]').exists())
 
     await wrapper.find('button[type="button"]').trigger('click')
     await wrapper.find('form.modal').trigger('submit.prevent')
-    await new Promise((resolve) => setTimeout(resolve, 50))
+    await flushUntil(() => wrapper.text().includes('required'))
     expect(wrapper.text()).toContain('required')
 
     await wrapper.find('form.modal').trigger('submit.prevent')
-    await new Promise((resolve) => setTimeout(resolve, 50))
+    await flushUntil(() => wrapper.text().includes('invalid') && !wrapper.text().includes('required'))
 
     expect(wrapper.text()).not.toContain('required')
     expect(wrapper.text()).toContain('invalid')
