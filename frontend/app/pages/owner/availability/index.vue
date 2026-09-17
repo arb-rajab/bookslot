@@ -9,10 +9,11 @@ const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Frid
 
 const staff = ref<OwnerStaff[]>([])
 const loadingStaff = ref(false)
-const staffError = ref<string | null>(null)
+const staffListError = ref<string | null>(null)
 
 const newStaffName = ref('')
 const creatingStaff = ref(false)
+const staffFormErrors = useFormErrors()
 
 const selectedStaffId = ref<string | null>(null)
 
@@ -20,11 +21,11 @@ type DayRow = { enabled: boolean, start_time: string, end_time: string }
 const week = ref<DayRow[]>(DAY_NAMES.map(() => ({ enabled: false, start_time: '09:00', end_time: '17:00' })))
 const loadingHours = ref(false)
 const savingHours = ref(false)
-const hoursError = ref<string | null>(null)
+const hoursFormErrors = useFormErrors()
 
 const exceptions = ref<AvailabilityException[]>([])
 const loadingExceptions = ref(false)
-const exceptionError = ref<string | null>(null)
+const exceptionFormErrors = useFormErrors()
 const newException = ref({ date: '', is_available: false, reason: '' })
 
 watchEffect(() => {
@@ -35,7 +36,7 @@ watchEffect(() => {
 
 async function loadStaff(): Promise<void> {
   loadingStaff.value = true
-  staffError.value = null
+  staffListError.value = null
 
   try {
     const response = await apiFetch<{ staff: OwnerStaff[] }>('/owner/staff')
@@ -44,7 +45,7 @@ async function loadStaff(): Promise<void> {
       selectStaff(staff.value[0]!.id)
     }
   } catch (e) {
-    staffError.value = describeError(apiErrorBody(e).error)
+    staffListError.value = describeError(apiErrorBody(e).error)
   } finally {
     loadingStaff.value = false
   }
@@ -53,7 +54,7 @@ async function loadStaff(): Promise<void> {
 async function createStaff(): Promise<void> {
   if (!newStaffName.value.trim()) return
   creatingStaff.value = true
-  staffError.value = null
+  staffFormErrors.clear()
 
   try {
     const created = await apiFetch<OwnerStaff>('/owner/staff', { method: 'POST', body: { display_name: newStaffName.value } })
@@ -61,7 +62,7 @@ async function createStaff(): Promise<void> {
     newStaffName.value = ''
     selectStaff(created.id)
   } catch (e) {
-    staffError.value = describeError(apiErrorBody(e).error)
+    staffFormErrors.setFromError(e, describeError)
   } finally {
     creatingStaff.value = false
   }
@@ -74,7 +75,7 @@ async function selectStaff(id: string): Promise<void> {
 
 async function loadWorkingHours(staffId: string): Promise<void> {
   loadingHours.value = true
-  hoursError.value = null
+  hoursFormErrors.clear()
   week.value = DAY_NAMES.map(() => ({ enabled: false, start_time: '09:00', end_time: '17:00' }))
 
   try {
@@ -83,7 +84,7 @@ async function loadWorkingHours(staffId: string): Promise<void> {
       week.value[hour.day_of_week] = { enabled: true, start_time: hour.start_time.slice(0, 5), end_time: hour.end_time.slice(0, 5) }
     }
   } catch (e) {
-    hoursError.value = describeError(apiErrorBody(e).error)
+    hoursFormErrors.setFromError(e, describeError)
   } finally {
     loadingHours.value = false
   }
@@ -92,7 +93,7 @@ async function loadWorkingHours(staffId: string): Promise<void> {
 async function saveWorkingHours(): Promise<void> {
   if (!selectedStaffId.value) return
   savingHours.value = true
-  hoursError.value = null
+  hoursFormErrors.clear()
 
   const workingHours = week.value
     .map((row, day_of_week) => ({ ...row, day_of_week }))
@@ -105,21 +106,31 @@ async function saveWorkingHours(): Promise<void> {
       body: { working_hours: workingHours },
     })
   } catch (e) {
-    hoursError.value = describeError(apiErrorBody(e).error)
+    hoursFormErrors.setFromError(e, describeError)
   } finally {
     savingHours.value = false
   }
 }
 
+/**
+ * `working_hours.*.start_time`-shaped keys (Laravel's nested-array
+ * validation error keys) don't map to any one visible row-level field the
+ * way a flat form does — surfaced as one summarized banner instead of
+ * per-row inline errors, since there's no single input to anchor a
+ * `working_hours.2.end_time` error next to once the row list has already
+ * been filtered down to only the enabled days for submission.
+ */
+const hoursFieldErrorSummary = computed(() => Object.values(hoursFormErrors.fieldErrors.value).flat())
+
 async function loadExceptions(staffId: string): Promise<void> {
   loadingExceptions.value = true
-  exceptionError.value = null
+  exceptionFormErrors.clear()
 
   try {
     const response = await apiFetch<{ availability_exceptions: AvailabilityException[] }>(`/owner/staff/${staffId}/availability-exceptions`)
     exceptions.value = response.availability_exceptions
   } catch (e) {
-    exceptionError.value = describeError(apiErrorBody(e).error)
+    exceptionFormErrors.setFromError(e, describeError)
   } finally {
     loadingExceptions.value = false
   }
@@ -127,7 +138,7 @@ async function loadExceptions(staffId: string): Promise<void> {
 
 async function addException(): Promise<void> {
   if (!selectedStaffId.value || !newException.value.date) return
-  exceptionError.value = null
+  exceptionFormErrors.clear()
 
   try {
     const created = await apiFetch<AvailabilityException>(`/owner/staff/${selectedStaffId.value}/availability-exceptions`, {
@@ -137,7 +148,7 @@ async function addException(): Promise<void> {
     exceptions.value.push(created)
     newException.value = { date: '', is_available: false, reason: '' }
   } catch (e) {
-    exceptionError.value = describeError(apiErrorBody(e).error)
+    exceptionFormErrors.setFromError(e, describeError)
   }
 }
 
@@ -148,7 +159,7 @@ async function deleteException(exception: AvailabilityException): Promise<void> 
     await apiFetch(`/owner/staff/${selectedStaffId.value}/availability-exceptions/${exception.id}`, { method: 'DELETE' })
     exceptions.value = exceptions.value.filter((e) => e.id !== exception.id)
   } catch (e) {
-    exceptionError.value = describeError(apiErrorBody(e).error)
+    exceptionFormErrors.setFromError(e, describeError)
   }
 }
 
@@ -166,7 +177,7 @@ function describeError(code: string): string {
   <div>
     <h1>Availability</h1>
 
-    <p v-if="staffError" class="error">{{ staffError }}</p>
+    <p v-if="staffListError" class="error">{{ staffListError }}</p>
 
     <div class="layout">
       <aside class="staff-list">
@@ -185,8 +196,15 @@ function describeError(code: string): string {
             </button>
           </li>
         </ul>
+        <p v-if="staffFormErrors.generalError.value" class="error">{{ staffFormErrors.generalError.value }}</p>
         <form class="add-staff" @submit.prevent="createStaff">
-          <input v-model="newStaffName" type="text" placeholder="New staff name" />
+          <input
+            v-model="newStaffName"
+            type="text"
+            placeholder="New staff name"
+            :class="{ invalid: staffFormErrors.errorFor('display_name') }"
+          />
+          <FieldError :message="staffFormErrors.errorFor('display_name')" />
           <button type="submit" :disabled="creatingStaff">Add</button>
         </form>
       </aside>
@@ -194,7 +212,8 @@ function describeError(code: string): string {
       <section v-if="selectedStaffId" class="detail">
         <div class="card">
           <h2>Weekly working hours</h2>
-          <p v-if="hoursError" class="error">{{ hoursError }}</p>
+          <p v-if="hoursFormErrors.generalError.value" class="error">{{ hoursFormErrors.generalError.value }}</p>
+          <p v-for="(message, index) in hoursFieldErrorSummary" :key="index" class="error">{{ message }}</p>
           <p v-if="loadingHours">Loading…</p>
           <template v-else>
             <div v-for="(day, index) in week" :key="index" class="day-row">
@@ -216,7 +235,7 @@ function describeError(code: string): string {
 
         <div class="card">
           <h2>One-off exceptions (holidays, closures)</h2>
-          <p v-if="exceptionError" class="error">{{ exceptionError }}</p>
+          <p v-if="exceptionFormErrors.generalError.value" class="error">{{ exceptionFormErrors.generalError.value }}</p>
           <p v-if="loadingExceptions">Loading…</p>
           <table v-else-if="exceptions.length > 0" class="data-table">
             <thead><tr><th>Date</th><th>Available?</th><th>Reason</th><th></th></tr></thead>
@@ -232,9 +251,25 @@ function describeError(code: string): string {
           <p v-else class="muted">No exceptions on record.</p>
 
           <form class="add-exception" @submit.prevent="addException">
-            <input v-model="newException.date" type="date" required />
+            <div class="field">
+              <input
+                v-model="newException.date"
+                type="date"
+                required
+                :class="{ invalid: exceptionFormErrors.errorFor('date') }"
+              />
+              <FieldError :message="exceptionFormErrors.errorFor('date')" />
+            </div>
             <label><input v-model="newException.is_available" type="checkbox" /> Available (unusual open day)</label>
-            <input v-model="newException.reason" type="text" placeholder="Reason (optional)" />
+            <div class="field">
+              <input
+                v-model="newException.reason"
+                type="text"
+                placeholder="Reason (optional)"
+                :class="{ invalid: exceptionFormErrors.errorFor('reason') }"
+              />
+              <FieldError :message="exceptionFormErrors.errorFor('reason')" />
+            </div>
             <button type="submit">Add exception</button>
           </form>
         </div>
@@ -344,13 +379,23 @@ function describeError(code: string): string {
 .add-exception {
   display: flex;
   gap: 0.5rem;
-  align-items: center;
+  align-items: flex-start;
   flex-wrap: wrap;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
 }
 
 input[type='text'],
 input[type='date'] {
   padding: 0.4rem;
+}
+
+input.invalid {
+  border-color: #b3261e;
 }
 
 button {

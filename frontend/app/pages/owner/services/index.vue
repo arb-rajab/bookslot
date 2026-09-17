@@ -10,7 +10,7 @@ const loading = ref(false)
 const listError = ref<string | null>(null)
 
 const editingId = ref<string | null>(null)
-const formError = ref<string | null>(null)
+const { generalError: formError, errorFor, setFromError, clear: clearFormErrors } = useFormErrors()
 const saving = ref(false)
 
 const blankForm = () => ({
@@ -51,7 +51,7 @@ async function loadServices(): Promise<void> {
 function startCreate(): void {
   editingId.value = null
   form.value = blankForm()
-  formError.value = null
+  clearFormErrors()
   showForm.value = true
 }
 
@@ -68,13 +68,13 @@ function startEdit(service: OwnerService): void {
     buffer_before_minutes: service.buffer_before_minutes,
     buffer_after_minutes: service.buffer_after_minutes,
   }
-  formError.value = null
+  clearFormErrors()
   showForm.value = true
 }
 
 async function submitForm(): Promise<void> {
   saving.value = true
-  formError.value = null
+  clearFormErrors()
 
   const body: Record<string, unknown> = {
     name: form.value.name,
@@ -102,7 +102,7 @@ async function submitForm(): Promise<void> {
     }
     showForm.value = false
   } catch (e) {
-    formError.value = describeError(apiErrorBody(e).error)
+    setFromError(e, describeError)
   } finally {
     saving.value = false
   }
@@ -183,29 +183,40 @@ function formatAmount(amount: number, currency: string): string {
         <h2>{{ editingId ? 'Edit service' : 'New service' }}</h2>
         <p v-if="formError" class="error">{{ formError }}</p>
 
-        <label>Name<input v-model="form.name" type="text" required /></label>
-        <label>Duration (minutes)<input v-model.number="form.duration_minutes" type="number" min="1" required /></label>
-        <label>Price (cents)<input v-model.number="form.price_amount" type="number" min="0" required /></label>
-        <label>Currency<input v-model="form.currency" type="text" maxlength="3" required /></label>
+        <label>Name<input v-model="form.name" type="text" required :class="{ invalid: errorFor('name') }" /><FieldError :message="errorFor('name')" /></label>
+        <label>Duration (minutes)<input v-model.number="form.duration_minutes" type="number" min="1" required :class="{ invalid: errorFor('duration_minutes') }" /><FieldError :message="errorFor('duration_minutes')" /></label>
+        <label>Price (cents)<input v-model.number="form.price_amount" type="number" min="0" required :class="{ invalid: errorFor('price_amount') }" /><FieldError :message="errorFor('price_amount')" /></label>
+        <label>Currency<input v-model="form.currency" type="text" maxlength="3" required :class="{ invalid: errorFor('currency') }" /><FieldError :message="errorFor('currency')" /></label>
 
         <label>
           Deposit type
-          <select v-model="form.deposit_type">
+          <select v-model="form.deposit_type" :class="{ invalid: errorFor('deposit_type') }">
             <option value="fixed">Fixed</option>
             <option value="percentage">Percentage</option>
           </select>
+          <FieldError :message="errorFor('deposit_type')" />
         </label>
         <label v-if="form.deposit_type === 'fixed'">
           Deposit amount (cents)
-          <input v-model.number="form.deposit_fixed_amount" type="number" min="0" required />
+          <input v-model.number="form.deposit_fixed_amount" type="number" min="0" required :class="{ invalid: errorFor('deposit_fixed_amount') }" />
+          <FieldError :message="errorFor('deposit_fixed_amount')" />
         </label>
         <label v-else>
           Deposit percentage (basis points)
-          <input v-model.number="form.deposit_percentage_bps" type="number" min="0" required />
+          <input v-model.number="form.deposit_percentage_bps" type="number" min="0" required :class="{ invalid: errorFor('deposit_percentage_bps') }" />
+          <FieldError :message="errorFor('deposit_percentage_bps')" />
         </label>
 
-        <label>Buffer before (minutes)<input v-model.number="form.buffer_before_minutes" type="number" min="0" max="1440" required /></label>
-        <label>Buffer after (minutes)<input v-model.number="form.buffer_after_minutes" type="number" min="0" max="1440" required /></label>
+        <label>
+          Buffer before (minutes)
+          <input v-model.number="form.buffer_before_minutes" type="number" min="0" max="1440" required :class="{ invalid: errorFor('buffer_before_minutes') }" />
+          <FieldError :message="errorFor('buffer_before_minutes')" />
+        </label>
+        <label>
+          Buffer after (minutes)
+          <input v-model.number="form.buffer_after_minutes" type="number" min="0" max="1440" required :class="{ invalid: errorFor('buffer_after_minutes') }" />
+          <FieldError :message="errorFor('buffer_after_minutes')" />
+        </label>
 
         <div class="modal-actions">
           <button type="button" class="secondary" @click="showForm = false">Cancel</button>
@@ -236,6 +247,11 @@ function formatAmount(amount: number, currency: string): string {
   border-radius: 6px;
   padding: 0.75rem 1rem;
   margin: 1rem 0;
+}
+
+input.invalid,
+select.invalid {
+  border-color: #b3261e;
 }
 
 .data-table {

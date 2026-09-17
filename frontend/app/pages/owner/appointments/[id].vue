@@ -11,7 +11,7 @@ const loading = ref(true)
 const loadError = ref<string | null>(null)
 const cancelReason = ref('')
 const cancelling = ref(false)
-const cancelError = ref<string | null>(null)
+const { generalError: cancelError, errorFor: cancelErrorFor, setFromError: setCancelErrorFromError, clear: clearCancelErrors } = useFormErrors()
 
 onMounted(load)
 
@@ -32,7 +32,7 @@ const cancellable = computed(() => detail.value?.status === 'pending_payment' ||
 
 async function cancelAppointment(): Promise<void> {
   cancelling.value = true
-  cancelError.value = null
+  clearCancelErrors()
 
   try {
     detail.value = await apiFetch<OwnerAppointmentDetail>(`/owner/appointments/${appointmentId}/cancel`, {
@@ -40,7 +40,7 @@ async function cancelAppointment(): Promise<void> {
       body: { reason: cancelReason.value || null },
     })
   } catch (e) {
-    cancelError.value = describeError(apiErrorBody(e).error)
+    setCancelErrorFromError(e, describeError)
   } finally {
     cancelling.value = false
   }
@@ -154,7 +154,15 @@ function statusLabel(status: string): string {
         </p>
         <p v-if="cancelError" class="error">{{ cancelError }}</p>
         <div class="cancel-form">
-          <input v-model="cancelReason" type="text" placeholder="Reason (optional)" />
+          <div class="field">
+            <input
+              v-model="cancelReason"
+              type="text"
+              placeholder="Reason (optional)"
+              :class="{ invalid: cancelErrorFor('reason') }"
+            />
+            <FieldError :message="cancelErrorFor('reason')" />
+          </div>
           <button type="button" class="danger" :disabled="cancelling" @click="cancelAppointment">
             {{ cancelling ? 'Cancelling…' : 'Cancel appointment' }}
           </button>
@@ -222,10 +230,20 @@ dd {
   flex-wrap: wrap;
 }
 
-.cancel-form input {
+.cancel-form .field {
   flex: 1;
   min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.cancel-form input {
   padding: 0.5rem;
+}
+
+.cancel-form input.invalid {
+  border-color: #b3261e;
 }
 
 button {
