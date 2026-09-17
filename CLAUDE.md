@@ -619,3 +619,69 @@ of preference:
   index. Same lesson D-0056 already recorded for `refunds`/`payments`:
   check the existing schema before assuming a new feature needs new
   migrations.
+
+## Session 32 additions — owner-admin form validation errors; a fresh
+  container has no `frontend/node_modules` either, and `npx vue-tsc`
+  fetches a broken standalone copy if you don't `npm ci` first
+
+- **The public booking page (`frontend/app/pages/tenants/[slug]/index.vue`)
+  already had the right pattern for this** — a `fieldErrors: Record<string,
+  string[]>` ref populated from `apiErrorBody(e).fields` on a
+  `VALIDATION_FAILED` 422, rendered as `<span class="field-error">` next to
+  each input. **Every owner-admin form (services, staff, working hours,
+  availability exceptions, appointment cancellation) never adopted it** —
+  each one's `describeError()`/catch block reads only `apiErrorBody(e).error`
+  and shows a single generic "Please check the highlighted fields." banner,
+  silently discarding the exact same `fields` object the backend already
+  sends them (confirmed directly: `bootstrap/app.php`'s `ValidationException`
+  render callback returns `{"error": "VALIDATION_FAILED", "fields": {...}}`
+  for every `api/*` route, admin or public, unchanged since it was written).
+  This was a real, confirmed gap, not a hypothetical one — none of these
+  five forms had any inline field-error display before this session.
+- **Built `frontend/app/composables/useFormErrors.ts`** as the one shared
+  place this logic now lives, rather than five slightly different
+  re-implementations: `applyError(e, describeError)` sets both a
+  `formError` banner and a `fieldErrors` map from a caught error in one
+  call, `fieldError(field)` reads the first message for a field,
+  `otherFieldErrors(knownFields)` surfaces any field the form has no
+  dedicated input for (so nothing the backend reports is ever silently
+  dropped), and `clear()` resets both before a new attempt. Precedence
+  decision (documented in the composable's own docblock): the server's 422
+  is authoritative — `applyError` always *replaces* the previous attempt's
+  errors wholesale rather than merging, so a resubmission never shows a
+  stale field error for something the latest response says is now fine.
+  Native HTML `required`/`min`/`max` (already used throughout these forms)
+  still gives immediate client-side feedback and blocks a submit before it
+  reaches the server, but only for what the browser can check itself — it
+  never suppresses or overrides a server error, since it can't express this
+  codebase's cross-field/uniqueness rules (e.g. `ServiceController::update()`'s
+  deposit_type/amount invariant) at all.
+- **The weekly-working-hours `PUT` endpoint's validation errors are the one
+  genuinely tricky case**, and worth flagging for whoever touches this
+  page next: `WorkingHourController::replace()` validates
+  `working_hours.*.start_time`/`working_hours.*.end_time` against the
+  *array index in the submitted payload* (only enabled days, in week
+  order), which is **not** the same as the day-of-week index the UI keys
+  its rows by once any day is disabled — day 0 (Sunday) disabled and only
+  Monday (day 1) enabled means Monday is payload index 0, not 1. Mapping a
+  `working_hours.0.end_time` error back to the visible Monday row needed
+  an explicit index-translation helper (`enabledDayIndexes`/
+  `workingHourFieldError()` in `availability/index.vue`) — a naive
+  `fieldErrors['working_hours.' + dayOfWeek + '.end_time']` lookup would
+  silently show nothing, or worse, show the wrong day's error, the moment
+  any earlier day in the week is disabled.
+- **A fresh container has no `frontend/node_modules` at all** (this
+  session's container had none, same "genuinely fresh every session"
+  pattern Sessions 21-28 already documented for the Postgres/RabbitMQ
+  side) — running `npx vue-tsc --noEmit` before `npm ci` doesn't just fail,
+  it makes `npx` silently fetch and run a *different, unpinned* `vue-tsc`
+  version from the registry, which then hits the exact
+  `ERR_PACKAGE_PATH_NOT_EXPORTED` failure Session 24 already diagnosed
+  (`vue-tsc` resolving TypeScript's removed `./lib/tsc` subpath) — except
+  this time it's not a real TS 7 mismatch, it's `npx` ignoring the
+  project's own pinned, compatible `vue-tsc`/`typescript` versions in
+  `frontend/package.json` entirely because they were never installed.
+  `cd frontend && npm ci` first, then `npx vue-tsc --noEmit` (or `npm run
+  typecheck`) resolves to the project's own pinned copy and passes clean.
+  Don't mistake this for a real Session-24-style TS/vue-tsc incompatibility
+  without first checking whether `frontend/node_modules` exists at all.
