@@ -1,8 +1,10 @@
 <?php
 
+use App\Mail\AppointmentReminderMail;
 use App\Models\Appointment;
 use App\Models\BookingEvent;
 use App\Models\Customer;
+use App\Models\NotificationDelivery;
 use App\Models\Payment;
 use App\Models\PaymentMandate;
 use App\Models\Refund;
@@ -10,6 +12,8 @@ use App\Models\Tenant;
 use App\Models\User;
 use App\Tenancy\TenantContext;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Str;
 use Tests\Support\BookingFixture;
 
 use function Pest\Laravel\getJson;
@@ -20,6 +24,9 @@ use function Pest\Laravel\postJson;
  * (05-api-contracts.md endpoint 11, FR-18, D-0059). No PaymentIntentGateway
  * binding needed file-wide — unlike refund()/chargeBalance(), neither
  * action here calls Stripe (D-0022).
+ *
+ * POST /api/owner/customers/{id}/re-invite (05-api-contracts.md endpoint 9,
+ * FR-23/D-0014/D-0023, built Session 30/D-0060).
  */
 function customerOwnerAndTenant(): array
 {
@@ -337,4 +344,208 @@ test('a staff member cannot call the owner customer-erasure endpoint', function 
 
 test('an unauthenticated request to the customer-erasure endpoint is rejected', function () {
     postJson('/api/owner/customers/some-id/erasure')->assertStatus(401);
+});
+
+test('an owner re-invites a customer: queues an email and records a distinct audit/notification purpose', function () {
+    Mail::fake();
+
+    [$tenant] = customerOwnerAndTenant();
+    $appointment = BookingFixture::appointmentFor($tenant, ['status' => 'no_show']);
+    $customerEmail = TenantContext::run($tenant->id, fn () => $appointment->customer->email);
+
+    $xsrf = loginAsCustomerOwner($tenant);
+
+    $response = postJson("/api/owner/customers/{$appointment->customer_id}/re-invite", [], [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+
+    $response->assertStatus(202);
+    $response->assertJson(['status' => 'queued', 'channel' => 'email']);
+
+    Mail::assertSent(AppointmentReminderMail::class, fn ($mail) => $mail->hasTo($customerEmail) && $mail->delivery->purpose === 'rebooking_invite'
+    );
+
+    TenantContext::run($tenant->id, function () use ($appointment) {
+        $delivery = NotificationDelivery::query()->where('appointment_id', $appointment->id)->where('purpose', 'rebooking_invite')->firstOrFail();
+        expect($delivery->channel)->toBe('email');
+        expect($delivery->status)->toBe('sent');
+
+        $event = BookingEvent::query()->where('appointment_id', $appointment->id)->where('event_type', 'rebooking_invite_sent')->firstOrFail();
+        expect($event->actor_type)->toBe('owner');
+        expect($event->metadata['notification_delivery_id'])->toBe($delivery->id);
+    });
+});
+
+test('re-invite is independent of no-show status — a customer whose last appointment was completed can also be re-invited', function () {
+    Mail::fake();
+
+    [$tenant] = customerOwnerAndTenant();
+    $appointment = BookingFixture::appointmentFor($tenant, ['status' => 'completed']);
+
+    $xsrf = loginAsCustomerOwner($tenant);
+
+    $response = postJson("/api/owner/customers/{$appointment->customer_id}/re-invite", [], [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+
+    $response->assertStatus(202);
+    Mail::assertSent(AppointmentReminderMail::class);
+});
+
+test('a second re-invite call for the same customer is not deduplicated — D-0060 treats it as a real, repeatable resend', function () {
+    Mail::fake();
+
+    [$tenant] = customerOwnerAndTenant();
+    $appointment = BookingFixture::appointmentFor($tenant, ['status' => 'no_show']);
+
+    $xsrf = loginAsCustomerOwner($tenant);
+
+    $first = postJson("/api/owner/customers/{$appointment->customer_id}/re-invite", [], [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+    $first->assertStatus(202);
+
+    $second = postJson("/api/owner/customers/{$appointment->customer_id}/re-invite", [], [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+    $second->assertStatus(202);
+
+    Mail::assertSent(AppointmentReminderMail::class, 2);
+
+    TenantContext::run($tenant->id, function () use ($appointment) {
+        $count = NotificationDelivery::query()
+            ->where('appointment_id', $appointment->id)
+            ->where('purpose', 'rebooking_invite')
+            ->count();
+        expect($count)->toBe(2);
+
+        $eventCount = BookingEvent::query()
+            ->where('appointment_id', $appointment->id)
+            ->where('event_type', 'rebooking_invite_sent')
+            ->count();
+        expect($eventCount)->toBe(2);
+    });
+});
+
+test('re-invite attaches to the customer\'s most recent appointment when they have more than one', function () {
+    Mail::fake();
+
+    [$tenant] = customerOwnerAndTenant();
+
+    $customerId = TenantContext::run($tenant->id, fn () => Customer::factory()->create(['tenant_id' => $tenant->id])->id);
+
+    // starts_at is a database-generated STORED column derived from
+    // appointment_range (Appointment model's own docblock) — never
+    // settable directly, so distinct ordering is established via
+    // appointment_range at creation time, not by mutating starts_at after
+    // the fact. Distinct staff per appointment sidesteps the
+    // tenant+staff exclusion constraint regardless of range overlap.
+    $olderStart = now()->addDays(10);
+    $olderAppointment = BookingFixture::appointmentFor($tenant, [
+        'customer_id' => $customerId,
+        'status' => 'completed',
+        'appointment_range' => sprintf('[%s,%s)', $olderStart->toIso8601String(), $olderStart->clone()->addHour()->toIso8601String()),
+    ]);
+
+    $newerStart = now()->addDays(40);
+    $newerAppointment = BookingFixture::appointmentFor($tenant, [
+        'customer_id' => $customerId,
+        'status' => 'no_show',
+        'appointment_range' => sprintf('[%s,%s)', $newerStart->toIso8601String(), $newerStart->clone()->addHour()->toIso8601String()),
+    ]);
+
+    $xsrf = loginAsCustomerOwner($tenant);
+
+    $response = postJson("/api/owner/customers/{$customerId}/re-invite", [], [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+    $response->assertStatus(202);
+
+    TenantContext::run($tenant->id, function () use ($newerAppointment, $olderAppointment) {
+        expect(NotificationDelivery::query()->where('appointment_id', $newerAppointment->id)->where('purpose', 'rebooking_invite')->exists())->toBeTrue();
+        expect(NotificationDelivery::query()->where('appointment_id', $olderAppointment->id)->where('purpose', 'rebooking_invite')->exists())->toBeFalse();
+    });
+});
+
+test('re-inviting an unknown customer id returns a plain 404', function () {
+    [$tenant] = customerOwnerAndTenant();
+    $xsrf = loginAsCustomerOwner($tenant);
+
+    $response = postJson('/api/owner/customers/'.Str::uuid()->toString().'/re-invite', [], [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+
+    $response->assertStatus(404);
+    $response->assertJson(['error' => 'NOT_FOUND']);
+});
+
+test('a customer with no appointment history at all (a defensive guard, not a reachable path in practice) also gets a plain 404, not a 500', function () {
+    [$tenant] = customerOwnerAndTenant();
+    $customerId = TenantContext::run($tenant->id, fn () => Customer::factory()->create(['tenant_id' => $tenant->id])->id);
+
+    $xsrf = loginAsCustomerOwner($tenant);
+
+    $response = postJson("/api/owner/customers/{$customerId}/re-invite", [], [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+
+    $response->assertStatus(404);
+    $response->assertJson(['error' => 'NOT_FOUND']);
+});
+
+test('an owner cannot re-invite another tenant\'s customer — cross-tenant access resolves to the same 404, and the other tenant is left untouched', function () {
+    Mail::fake();
+
+    [$tenant] = customerOwnerAndTenant();
+    $otherTenant = Tenant::factory()->create();
+    $foreignAppointment = BookingFixture::appointmentFor($otherTenant, ['status' => 'no_show']);
+
+    $xsrf = loginAsCustomerOwner($tenant);
+
+    $response = postJson("/api/owner/customers/{$foreignAppointment->customer_id}/re-invite", [], [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+
+    $response->assertStatus(404);
+    $response->assertJson(['error' => 'NOT_FOUND']);
+
+    Mail::assertNothingSent();
+
+    TenantContext::run($otherTenant->id, function () use ($foreignAppointment) {
+        expect(NotificationDelivery::query()->where('appointment_id', $foreignAppointment->id)->where('purpose', 'rebooking_invite')->exists())->toBeFalse();
+        expect(BookingEvent::query()->where('appointment_id', $foreignAppointment->id)->where('event_type', 'rebooking_invite_sent')->exists())->toBeFalse();
+    });
+});
+
+test('a staff member cannot call the owner re-invite endpoint', function () {
+    $tenant = Tenant::factory()->create();
+
+    TenantContext::run($tenant->id, function () use ($tenant) {
+        User::factory()->create([
+            'tenant_id' => $tenant->id,
+            'role' => 'staff',
+            'email' => 'staff-reinvite@example.test',
+            'password_hash' => Hash::make('correct-password'),
+        ]);
+    });
+
+    $appointment = BookingFixture::appointmentFor($tenant, ['status' => 'no_show']);
+
+    disableConsoleCsrfBypass();
+    [$xsrf, $login] = loginAndCaptureXsrf("/api/tenants/{$tenant->slug}/login", [
+        'email' => 'staff-reinvite@example.test',
+        'password' => 'correct-password',
+    ]);
+    $login->assertOk();
+
+    $response = postJson("/api/owner/customers/{$appointment->customer_id}/re-invite", [], [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+
+    $response->assertStatus(403);
+});
+
+test('an unauthenticated request to re-invite is rejected', function () {
+    postJson('/api/owner/customers/'.Str::uuid()->toString().'/re-invite')
+        ->assertStatus(401);
 });

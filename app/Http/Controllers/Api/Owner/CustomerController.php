@@ -3,9 +3,11 @@
 namespace App\Http\Controllers\Api\Owner;
 
 use App\Http\Controllers\Controller;
+use App\Jobs\SendAppointmentReminderJob;
 use App\Models\Appointment;
 use App\Models\BookingEvent;
 use App\Models\Customer;
+use App\Models\NotificationDelivery;
 use App\Models\Payment;
 use App\Models\PaymentMandate;
 use App\Models\Refund;
@@ -15,12 +17,16 @@ use Illuminate\Support\Str;
 
 /**
  * POST /api/owner/customers/{id}/erasure, GET /api/owner/customers/{id}/export
- * (05-api-contracts.md endpoint 11, FR-18, D-0059). Both behind plain
- * `auth.tenant` (see routes/api.php's owner group) — unlike refund()/
- * chargeBalance()/StripeConnectController, neither action calls Stripe:
- * D-0022 already ruled `payment_mandates` (the only Stripe-ID-bearing table
- * a customer's data touches) is never modified or deleted by erasure, and
- * export is a read-only dump. Whole-request transaction wrap is safe here.
+ * (05-api-contracts.md endpoint 11, FR-18, D-0059), and
+ * POST /api/owner/customers/{id}/re-invite (05-api-contracts.md endpoint 9,
+ * FR-23/D-0014/D-0023, detailed Session 6/7, built Session 30/D-0060). All
+ * three behind plain `auth.tenant` (see routes/api.php's owner group) —
+ * unlike refund()/chargeBalance()/StripeConnectController, none of them
+ * calls Stripe: D-0022 already ruled `payment_mandates` (the only
+ * Stripe-ID-bearing table a customer's data touches) is never modified or
+ * deleted by erasure, export is a read-only dump, and re-invite never
+ * touches any external dependency mid-request. Whole-request transaction
+ * wrap is safe for all three.
  *
  * Erasure is anonymize-in-place, never row deletion, per 04-data-model.md's
  * soft/hard delete matrix and D-0022: deleting `customers` would either
@@ -29,6 +35,16 @@ use Illuminate\Support\Str;
  * `payments`, `refunds`, `payment_mandates`, and `booking_events` are never
  * touched by erase() — only `customers.name`/`email`/`phone`/`notes` are
  * anonymized and `erasure_requested_at` is set.
+ *
+ * re-invite() is a deliberate, owner-triggered action independent of the
+ * customer's most recent appointment's own status (FR-23 is explicit this
+ * isn't gated on no-show) — no eligibility check against
+ * `appointments.status` exists here at all, unlike this same controller's
+ * money/status-mutating siblings. Repeatable by design (D-0060): each call
+ * schedules and sends a brand new `rebooking_invite`, never deduplicated
+ * against a prior one — matching FR-23's own "at their own discretion"
+ * framing (a real resend action, not an idempotent state transition like
+ * refund/status-update).
  */
 class CustomerController extends Controller
 {
@@ -216,6 +232,61 @@ class CustomerController extends Controller
         ]);
 
         return response()->json($this->presentCustomer($customer));
+    }
+
+    /**
+     * FR-23 re-invite. See this class's own docblock and D-0060 for why
+     * this is deliberately unbounded/repeatable rather than idempotent.
+     */
+    public function reinvite(Request $request, string $id): JsonResponse
+    {
+        // Tenant-scoped by BelongsToTenant + RLS, same convention as every
+        // other owner controller — a customer id belonging to another
+        // tenant is indistinguishable from a nonexistent one here, so it
+        // resolves to the same 404 rather than a 403 that would require an
+        // out-of-scope cross-tenant existence check.
+        $customer = Customer::query()->find($id);
+
+        if ($customer === null) {
+            return response()->json(['error' => 'NOT_FOUND'], 404);
+        }
+
+        // notification_deliveries.appointment_id is NOT NULL (04-data-
+        // model.md) — the send needs some appointment to attach the audit
+        // trail to, so this uses the customer's own most recent one. In
+        // practice every Customer row is created transactionally alongside
+        // its first Appointment (BookingController::store()) and
+        // appointments are never hard-deleted, so a customer with zero
+        // appointments should not occur; guarded defensively anyway rather
+        // than assumed.
+        $appointment = Appointment::query()
+            ->where('customer_id', $customer->id)
+            ->orderByDesc('starts_at')
+            ->first();
+
+        if ($appointment === null) {
+            return response()->json(['error' => 'NOT_FOUND'], 404);
+        }
+
+        $delivery = NotificationDelivery::query()->create([
+            'appointment_id' => $appointment->id,
+            'purpose' => 'rebooking_invite',
+            'channel' => 'email',
+            'scheduled_for' => now(),
+            'status' => 'scheduled',
+        ]);
+
+        SendAppointmentReminderJob::dispatch($appointment->tenant_id, $delivery->id);
+
+        BookingEvent::query()->create([
+            'appointment_id' => $appointment->id,
+            'actor_type' => 'owner',
+            'actor_id' => $request->user()->id,
+            'event_type' => 'rebooking_invite_sent',
+            'metadata' => ['notification_delivery_id' => $delivery->id],
+        ]);
+
+        return response()->json(['status' => 'queued', 'channel' => 'email'], 202);
     }
 
     /** @return array<string, mixed> */

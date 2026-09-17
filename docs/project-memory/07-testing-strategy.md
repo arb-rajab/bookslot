@@ -775,3 +775,27 @@ This is a distinct test *category*, not a one-off: any future auth/tenancy
 decision whose correctness depends on "the first query a connection ever
 runs" (D-0043's exact failure shape) belongs here, in a genuinely separate
 process, not as another sequential Pest assertion.
+
+## Amendment (Session 30, 2026-09-16) — owner-initiated customer re-invite coverage added (D-0060)
+
+**Re-invite (FR-23/D-0014/D-0060).** `tests/Feature/Api/OwnerCustomerControllerTest.php`
+(shared with Session 29's export/erasure tests since Session 31's merge
+reconciliation combined both sessions' additions into one file; 9 tests):
+a happy-path re-invite (queued response, a
+`notification_deliveries` row with `purpose = 'rebooking_invite'`, a
+matching `booking_events` row, the email addressed to the customer on
+file); re-invite succeeding on a `completed`-status last appointment, not
+just a `no_show` one (FR-23's explicit not-gated-on-no-show text); a
+**repeatability** case proving D-0060's central ruling — two calls produce
+two independent `notification_deliveries`/`booking_events` rows and two
+sent emails, not a deduplicated no-op; the most-recent-appointment
+selection case for a customer with more than one appointment; a
+zero-appointments defensive-guard `404`; an unknown-customer-id `404`; the
+now-standard cross-tenant `404` + untouched-foreign-state proof (D-0056/
+D-0057/D-0058's own pattern); a staff-role `403`; an unauthenticated `401`.
+
+**Fast gate after this session: 193/193 Pest tests (up from 184), `queue-broker`
+group 3/3 (needs a real local RabbitMQ broker per this repo's own
+`CLAUDE.md`; unaffected by this session's changes — this endpoint runs
+under `QUEUE_CONNECTION=sync` in `.env.testing`, so its own tests never
+touch the broker), `tests/TenantIsolation` 20/20 unchanged, Pint clean.**
