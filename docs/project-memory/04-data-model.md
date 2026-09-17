@@ -716,12 +716,23 @@ here.
 | Table | Approach | Why |
 |---|---|---|
 | `tenants` | Soft delete (`deleted_at`) | Business closes account; a grace/export period precedes any real erasure, which is an orchestrated job, not a cascading `DELETE` |
-| `customers` | **Neither** — anonymize in place (`erasure_requested_at` set, PII columns nulled) | Deleting the row would either cascade-orphan `appointments` (breaking the studio's own accounting/audit history) or require `ON DELETE SET NULL`, which loses the same linkage. Anonymizing satisfies FR-18/06's erasure right for the personal-data fields specifically while preserving referential integrity and the studio's legitimate business records. **Does not extend to `payment_mandates`** (added Session 7, D-0022) — that table is retained in full, unmodified, on a separate legal-claims basis; see its own table notes above |
+| `customers` | **Neither** — anonymize in place (`erasure_requested_at` set, PII columns overwritten — see note below on `name`/`email`) | Deleting the row would either cascade-orphan `appointments` (breaking the studio's own accounting/audit history) or require `ON DELETE SET NULL`, which loses the same linkage. Anonymizing satisfies FR-18/06's erasure right for the personal-data fields specifically while preserving referential integrity and the studio's legitimate business records. **Does not extend to `payment_mandates`** (added Session 7, D-0022) — that table is retained in full, unmodified, on a separate legal-claims basis; see its own table notes above |
 | `staff`, `services` | Soft delete (`deleted_at` / `is_active`) | Historical `appointments` reference them with `ON DELETE RESTRICT`; a departed artist or discontinued service must stay resolvable for past bookings |
 | `appointments` | **No `deleted_at` at all** — `status = 'cancelled'` *is* the release mechanism | This is exactly what D-0007's partial exclusion constraint predicate depends on; adding a separate soft-delete flag alongside `status` would create two ways to represent "this slot is free" that could drift out of sync |
 | `payments`, `refunds` | Never deleted | Immutable financial/audit ledger — required for dispute evidence (06) |
 | `booking_events` | Never deleted | Audit trail; same reasoning |
 | `stripe_webhook_events` | Purged by a bounded-retention housekeeping job (not per-row soft delete) | Operational retention policy, not a data-model concern — deferred to `08` |
+
+**`customers` erasure, `name`/`email` specifically (Session 29, D-0059):**
+both columns are `NOT NULL` (`name`, and `email` — the latter also under
+the `(tenant_id, email)` unique index), so "nulled" above is imprecise for
+these two: `name` is overwritten with a fixed sentinel (`"Erased
+Customer"`), and `email` with a synthetic, per-erasure-unique placeholder
+(`erased-<uuid>@erased.invalid`) that satisfies the unique index rather
+than colliding across multiple erased customers in the same tenant.
+`phone` and `notes` (both nullable) are genuinely set to `null`. All four
+stop identifying the real person either way — the distinction is a schema
+constraint, not a policy difference.
 
 ## Migration order
 

@@ -159,8 +159,8 @@ and rate-limit numbers are still future-session work (see Deferred below).
 | `GET/POST/PATCH /api/owner/staff` | Manage staff/resources |
 | `GET/POST/PATCH /api/owner/staff/{id}/working-hours` | Recurring availability |
 | `POST /api/owner/staff/{id}/availability-exceptions` | One-off blocks/holidays |
-| `POST /api/owner/customers/{id}/erasure` | FR-18 erasure request |
-| `GET /api/owner/customers/{id}/export` | FR-18 export |
+| `POST /api/owner/customers/{id}/erasure` | FR-18 erasure request — **built Session 29, D-0059**, see endpoint 11 below |
+| `GET /api/owner/customers/{id}/export` | FR-18 export — **built Session 29, D-0059**, see endpoint 11 below |
 | `POST /api/owner/customers/{id}/re-invite` | FR-23/D-0014: manually re-invite a specific customer to book again — **defined Session 6**, see below |
 | `POST /api/owner/stripe/connect/onboarding-link` | Start/resume/refresh Stripe Connect Express onboarding — **built Session 28, D-0058** |
 | `GET /api/owner/stripe/connect/status` | Live Connect onboarding/charges-enabled status check — **built Session 28, D-0058** |
@@ -586,6 +586,97 @@ caller's own session resolves to, never a route parameter. `account.updated`
 `account.application.deauthorized` (added this session — see below) are
 the two Connect webhook events that asynchronously keep
 `tenants.stripe_onboarding_status` current between live status checks.
+
+### 11. `GET /api/owner/customers/{id}/export` / `POST /api/owner/customers/{id}/erasure` — built Session 29, D-0059
+
+FR-18. Both run behind plain `auth.tenant` (not `.external`) — **neither
+calls Stripe**: export is a read-only local dump, and D-0022 already rules
+that erasure never modifies or deletes `payment_mandates`, the only
+Stripe-ID-bearing table a customer's own data reaches. This is the
+opposite of endpoints 5/6/10's reasoning, stated explicitly since every
+other recent owner-route addition needed `.external` — this one is the
+first since D-0042/D-0051 that genuinely doesn't.
+
+**`GET .../export` response `200`:**
+
+```json
+{
+  "customer": {"id", "name", "email", "phone", "notes", "erasure_requested_at", "created_at"},
+  "appointments": [{"id", "service_name", "staff_name", "starts_at", "ends_at", "status", "cancelled_by", "cancelled_reason", "cancelled_at", "notes", "created_at"}],
+  "payments": [{"id", "appointment_id", "type", "status", "amount", "currency", "failure_code", "created_at", "refunds": [{"id", "amount", "reason", "status", "created_at"}]}],
+  "payment_mandates": [{"id", "appointment_id", "mandate_text", "mandate_template_version", "balance_amount_disclosed", "accepted_at", "accepted_ip", "accepted_user_agent"}],
+  "booking_events": [{"appointment_id", "event_type", "from_status", "to_status", "created_at"}]
+}
+```
+
+Scoping decisions, made explicitly rather than assumed:
+
+- No raw Stripe identifiers anywhere in the export (`stripe_payment_intent_id`,
+  `stripe_charge_id`, `stripe_refund_id`, `stripe_payment_method_id`) — same
+  "internal reconciliation detail" reasoning `Owner\AppointmentController`
+  already applies to the owner's own appointment-detail view. There is no
+  raw card data anywhere in this schema to strip (06's PCI SAQ A design) —
+  the brief's "payment_mandates minus raw card data" is satisfied trivially
+  by that design fact, not by omitting any mandate field.
+- `payment_mandates` fields ARE included in full otherwise (`mandate_text`,
+  `accepted_at`, `accepted_ip`, `accepted_user_agent`) — D-0022 classifies
+  these as evidentiary/consent-record for erasure's carve-out, but that
+  carve-out is about what erasure may retain, not about hiding them from
+  the subject's own access request.
+- `booking_events` is scoped to the customer's own `appointment_id`s, and
+  trimmed to `event_type`/`from_status`/`to_status`/`created_at` —
+  `actor_id` (a staff/owner user id, or meaningless for `system`/`webhook`)
+  and `metadata` (internal cross-references like `refund_id`, already
+  present elsewhere in the same export) are both excluded as operational
+  detail, not this customer's own data.
+
+**Errors:** `404` unknown `id` (tenant-scoped — a foreign tenant's customer
+id resolves the same as a nonexistent one, per this codebase's standing
+BOLA-avoidance pattern).
+
+**`POST .../erasure` response `200`:** `{"id", "name", "email", "phone", "erasure_requested_at"}`
+— always the post-erasure (anonymized) state, including on an idempotent
+repeat call (see below).
+
+**Erasure is anonymize-in-place, never row deletion** — `04-data-model.md`'s
+soft/hard delete matrix and D-0022 already establish this; this session
+built the action, not the policy. Only `customers.name`/`email`/`phone`/
+`notes` are overwritten (`name → "Erased Customer"`, `email →` a synthetic
+unique `erased-<uuid>@erased.invalid` value, satisfying the
+`(tenant_id, email)` unique index; `phone`/`notes → null`) and
+`erasure_requested_at` is set. `appointments`, `payments`, `refunds`,
+`payment_mandates`, and `booking_events` are never modified.
+
+**Eligibility — D-0059, a genuinely new decision, not implied by any prior
+one:** blocked with `409 ACTIVE_BOOKING_EXISTS` while the customer has any
+`pending_payment`/`confirmed` (still-live) appointment — anonymizing a
+customer the studio still needs to contact/identify to actually deliver an
+upcoming appointment would break real service delivery, not just data
+housekeeping. `completed`/`no_show`/`cancelled` appointments never block
+erasure. See D-0059 (`09-decision-log.md`) for the full reasoning and the
+rejected alternatives (unconditional cascade-block; unconditional allow).
+
+**Idempotent, not single-use:** a customer whose `erasure_requested_at` is
+already set gets a `200` echo of the current anonymized state on a repeat
+call, never a `409` — the same "retry is a safe no-op, not an error"
+discipline `PaymentConfirmationController` already established for its own
+not-single-use action (D-0021), chosen so a retried owner request (lost
+response, double click) can't surface as a confusing failure for an action
+that already fully succeeded. The repeat call does not re-randomize the
+anonymized email or write a second `booking_events` row.
+
+**Audit trail:** one `booking_events` row per erasure (`event_type:
+customer_erased`, `actor_type: owner`, `metadata: {customer_id}`),
+deliberately with `appointment_id: null` — this is a customer-level event,
+not one appointment's lifecycle transition, exactly the case
+`04-data-model.md`'s own `booking_events.appointment_id` column note
+already names ("null for ... an event not tied to one appointment
+lifecycle transition"). Not written once per affected appointment, to
+avoid conflating "the customer was erased" with each appointment's own
+status-transition audit trail.
+
+**Errors:** `404` unknown `id` (tenant-scoped, same BOLA-avoidance pattern
+as export); `409 ACTIVE_BOOKING_EXISTS` per the eligibility rule above.
 
 ## Stripe webhooks consumed
 

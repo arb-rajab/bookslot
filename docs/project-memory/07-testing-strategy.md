@@ -3,6 +3,12 @@
 > Project: bookslot (PRIVATE track)
 > Last updated: 2026-08-26 (Session 4 — concurrency/slot-integrity cases added after D-0008's DDL correction; amended Session 5 — framework decided, CI gate and E2E scope settled; amended Session 6 — the missing D-0008 invariant test added, plus one D-0006 gap; amended Session 7 — D-0021 confirm-payment token tests, the D-0010 erasure test D-0022 made writable, and `rebooking_invite` coverage; amended Session 9 — the two verification gaps Session 8's handoff left open (malformed/non-existent GUC values; an application-layer scope guard) closed by execution, and real HTTP-level tenant resolution wired for the first time; amended Session 10 — Sanctum SPA auth tested with a real CSRF-rejection case, booking creation built and tested end to end including the true multi-process concurrency case this section had flagged as missing since Session 8, and D-0027's transaction boundary proven against a real Stripe-touching controller; amended Session 16 — availability's derived-slot algorithm covered, plus this project's first real cross-origin/CSRF proof against a live server, outside the Pest suite entirely; amended Session 17 — owner appointment list/status coverage added, and a real Pest blind spot found and recorded: nested TenantContext::run() calls inside one test transaction mask an auth-ordering bug a live server exposes immediately)
 
+## Amendment (Session 29, 2026-09-16) — customer erasure/export coverage added, closing the D-0010/D-0022 erasure test gap this file has carried open since Session 7
+
+**Owner customer erasure/export (FR-18, D-0059).** `tests/Feature/Api/OwnerCustomerControllerTest.php` (12 tests): export returns the customer's own record plus appointments/payments (with nested refunds)/mandates-minus-Stripe-IDs/scoped-and-trimmed booking_events, never leaking a second customer's appointment into the response; export's cross-tenant `404`, staff-forbidden `403`, and unauthenticated `401` cases. Erasure: the long-open D-0010 test (see this file's own Session 7 amendment, finally writable given D-0022) — anonymizes `customers.name`/`email`/`phone`, sets `erasure_requested_at`, and asserts the linked `payment_mandates` row (including `accepted_ip`/`accepted_user_agent`) is byte-for-byte unchanged, plus `appointments`/`payments` left untouched and a `customer_erased` `booking_events` row with `appointment_id: null` (D-0059); erasure blocked `409 ACTIVE_BOOKING_EXISTS` on a `confirmed` appointment and, separately, on `pending_payment`; NOT blocked by a `cancelled` appointment; a repeat erasure call on an already-erased customer is idempotent (`200` echo, no second event, no re-randomized email); cross-tenant erasure `404` with the foreign customer proven untouched; staff-forbidden and unauthenticated cases.
+
+**Fast gate after this session:** `./vendor/bin/pest --exclude-group=queue-broker` 196 passed (184 at session start, 12 net new); `tests/TenantIsolation` 20/20 unchanged; `--group=queue-broker` 3/3; `pint --test` clean.
+
 ## Amendment (Session 17, 2026-08-26) — owner dashboard tests added; a real Pest blind spot found and recorded
 
 **Owner appointment list/status (D-0042).** `tests/Feature/Api/OwnerAppointmentControllerTest.php`: an owner sees appointments across every staff member in their tenant (not narrowed to "own bookings" the way D-0013's staff rule is), with customer/service/staff names and deposit status populated; marking a `confirmed` appointment `completed` or `no_show` succeeds and writes exactly one `booking_events` row (`status_changed`, `actor_type: owner`) with no `payments`/`refunds` side effect; marking a `pending_payment` or already-`completed` appointment is rejected `409 INVALID_STATUS_TRANSITION`; a cross-tenant appointment id gets a plain `404`, not `403` (see D-0042's correction to `05`); a staff-role session gets `403` from the owner-only route; an unauthenticated request gets `401`.
@@ -506,10 +512,11 @@ assumes real Postgres, full stop.
   D-0010's mandate evidence are actually wired to the same charge attempt,
   rather than two decisions that happen to describe a consistent story
   without anything enforcing the link between them.
-- **The D-0010 erasure test, now writable given D-0022 (added Session 7):**
+- **The D-0010 erasure test, writable given D-0022 (spec added Session 7,
+  built Session 29 — D-0059, `tests/Feature/Api/OwnerCustomerControllerTest.php`):**
   create a customer, a booking, and its `payment_mandates` row (including
   `accepted_ip`/`accepted_user_agent`); action FR-18 erasure on the
-  customer; assert `customers.name`/`email`/`phone` are nulled
+  customer; assert `customers.name`/`email`/`phone` are anonymized
   (`erasure_requested_at` set) exactly as `04`'s existing erasure handling
   already specifies, **and**, in the same test, assert every column on the
   linked `payment_mandates` row — including `accepted_ip` and
