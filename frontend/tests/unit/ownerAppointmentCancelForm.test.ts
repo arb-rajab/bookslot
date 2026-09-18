@@ -4,6 +4,7 @@ import type { AddressInfo } from 'node:net'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import OwnerAppointmentDetailPage from '~/pages/owner/appointments/[id].vue'
+import { flushUntil } from './support/waitFor'
 
 /**
  * The appointment-cancellation form was the third owner-admin form this
@@ -70,11 +71,11 @@ describe('owner/appointments/[id].vue', () => {
     })
 
     const wrapper = await mountSuspended(OwnerAppointmentDetailPage)
-    await new Promise((resolve) => setTimeout(resolve, 30))
+    await flushUntil(() => wrapper.find('.cancel-form input').exists())
 
     await wrapper.find('.cancel-form input').setValue('x'.repeat(300))
     await wrapper.find('button.danger').trigger('click')
-    await new Promise((resolve) => setTimeout(resolve, 50))
+    await flushUntil(() => wrapper.text().includes('Please check the highlighted fields.'))
 
     expect(wrapper.text()).toContain('Please check the highlighted fields.')
     expect(wrapper.text()).toContain('The reason may not be greater than 255 characters.')

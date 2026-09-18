@@ -685,3 +685,65 @@ of preference:
   typecheck`) resolves to the project's own pinned copy and passes clean.
   Don't mistake this for a real Session-24-style TS/vue-tsc incompatibility
   without first checking whether `frontend/node_modules` exists at all.
+
+## Session 33 additions — verifying Session 32's owner-admin form validation
+  branch by actually running the suites; a real Vitest flake found and
+  fixed, Playwright itself came back clean
+
+- **Session 32's work was never on `main`** — it was its own branch,
+  `claude/admin-form-validation-errors-8byoq2`, one commit ahead of the
+  same `main` tip this session started from. The session-handoff file's
+  own latest amendment (Session 31, merge reconciliation) doesn't mention
+  it at all, because it's a sibling branch, not something Session 31 could
+  have known about. Built this session's own branch on top of it
+  (`git checkout -B <branch> origin/claude/admin-form-validation-errors-8byoq2`)
+  rather than on `main`, since the task is to verify *that* branch's
+  markup, not to redo the work against a base that doesn't have it yet.
+- **`npx vitest run` (the whole suite, all 7 files as separate worker
+  processes) reproducibly failed 1 of Session 32's own 4 new form-test
+  files, but the same file passed every time run in isolation
+  (`npx vitest run tests/unit/ownerServicesForm.test.ts`).** Root cause:
+  every one of Session 32's new tests used a fixed
+  `await new Promise((resolve) => setTimeout(resolve, 20-50))` to "wait"
+  for an in-process mock HTTP server round-trip (CSRF-cookie fetch, then
+  the real POST/PUT) to finish before asserting on the rendered error
+  text. That fixed delay is a race, not a guarantee — under the CPU
+  contention of 7 vitest workers spawning at once (the full-suite case),
+  50ms was sometimes not enough for both round-trips plus the Vue
+  re-render to complete, so the assertion ran while the form was still
+  mid-request (`Saving…` still showing, no error text rendered yet) and
+  failed on wording that was never wrong. Confirmed directly: reran the
+  full suite 5 times in a row after the fix below, 20/20 tests green every
+  time; before the fix, at least 1 of 5 runs failed, each time on a
+  different file/assertion depending on which worker got starved.
+- **Fix: added `frontend/tests/unit/support/waitFor.ts` (`flushUntil`,
+  a small poll-until-predicate-or-timeout helper) and replaced every fixed
+  post-action `setTimeout` wait in the four new form-test files
+  (`ownerServicesForm.test.ts`, `ownerAvailabilityForm.test.ts`,
+  `ownerAppointmentCancelForm.test.ts`) with a poll on the actual condition
+  the test cares about** (the expected error text appearing, or
+  disappearing on resubmission, or the target `.day-row`/input existing
+  after initial mount) — both the initial-mount waits and the post-submit
+  waits, since both are subject to the identical race. This is a test-
+  harness fix only; none of Session 32's actual `.vue`/`useFormErrors.ts`
+  application code changed, and the fix doesn't paper over a slow app —
+  `flushUntil`'s default 2s timeout still fails the test loudly if the
+  condition is genuinely never met.
+- **Playwright's `owner-admin-forms.spec.ts` needed zero changes** — it
+  already used `getByLabel(...)`/`getByRole(...)` locators throughout
+  (role/label-based, not structural), and Session 32's markup change
+  (wrapping each input in a `<label>...<input/><span v-if="fieldError(...)">`
+  block) doesn't alter any label's accessible name in the no-error case
+  (the `<span>` simply doesn't render when `v-if` is false), so every
+  existing locator kept resolving to the same element. Ran the full
+  Playwright suite (`npx playwright test`, all 4 spec files, 10 tests)
+  twice, each time against a freshly `migrate:fresh --seed`ed `bookslot`
+  dev database per Session 25's own documented precaution — 10/10 passed
+  both times. No locator fix, no regression, nothing to harden here; the
+  fragility this session actually found was in the Vitest harness, not in
+  any Playwright locator.
+- **Backend fast gate unaffected by this branch, as expected (it touches
+  only `frontend/`)**: `./vendor/bin/pest --exclude-group=queue-broker`
+  205/205, `./vendor/bin/pint --test` clean, `npx vue-tsc --noEmit` clean.
+  Confirmed rather than assumed, since the task explicitly asked for a
+  real run, not an inference from the diff's file list.
