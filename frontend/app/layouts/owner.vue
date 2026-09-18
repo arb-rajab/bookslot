@@ -43,6 +43,7 @@ const navLinks = [
   { to: '/owner/availability', label: 'Availability' },
   { to: '/owner/notifications', label: 'Reminders' },
   { to: '/owner/queue-health', label: 'Queue health' },
+  { to: '/owner/settings/stripe', label: 'Stripe payouts' },
 ]
 </script>
 

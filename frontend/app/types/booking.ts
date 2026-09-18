@@ -53,6 +53,7 @@ export interface OwnerAppointment {
   status: string
   starts_at: string
   ends_at: string
+  customer_id: string | null
   customer_name: string | null
   service_name: string | null
   staff_name: string | null
