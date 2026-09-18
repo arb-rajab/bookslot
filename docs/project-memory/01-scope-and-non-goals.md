@@ -170,7 +170,28 @@ migration, a route, or a stub controller behind it.
       invent one — the endpoint it built is explicit-owner-action-only,
       same standing pattern as refund (D-0056). Distinct from "the
       off-session charge itself was never written," which Session 27
-      closed — see the built-and-proven entry above.
+      closed — see the built-and-proven entry above. **Session 35 (D-0061)
+      scoped this in full and deliberately deferred it** — not merely
+      re-confirmed as undesigned. Concretely: a per-tenant, two-valued
+      setting, read at appointment-`completed` time to gate an automatic
+      background charge; deferred (no schema, no job, not even an inert
+      settable column) because a real implementation needs the charge
+      trigger to key off a value *snapshotted at mandate-acceptance time*
+      (never a live tenant lookup, to avoid retroactively surprising a
+      customer whose consent predates a later policy change), needs to
+      handle a Connect-`restricted` tenant without a silent background
+      failure (D-0058), and because R-01 (no real pilot has ever run this
+      product) gives no validated signal that owner-click friction on
+      endpoint 6 is worth pre-building speculative infrastructure for.
+      D-0057's owner-initiated-only design stands as this project's only
+      balance-charge trigger until a future session has real product
+      justification to build the full mechanism. Session 35 also found
+      and fixed an independent, live accuracy bug this investigation
+      surfaced: `MandateRenderer`'s consent text had unconditionally
+      promised an "automatically charged" balance since Session 10, even
+      though no automatic mechanism has ever existed — corrected to
+      describe the owner-timed reality (charge or manual collection, "at
+      [tenant]'s discretion") without inventing new disclosure content.
 - [ ] **Post-appointment rebooking prompt** — zero code. Not started.
 - [x] **Stripe Connect (Express) onboarding** for a business to receive
       payouts — **built Session 28, D-0058**: account creation, hosted
