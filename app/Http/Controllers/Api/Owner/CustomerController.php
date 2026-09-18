@@ -145,13 +145,23 @@ class CustomerController extends Controller
                 'currency' => $payment->currency,
                 'failure_code' => $payment->failure_code,
                 'created_at' => $payment->created_at,
-                'refunds' => ($refundsByPayment->get($payment->id) ?? collect())->map(fn (Refund $refund) => [
-                    'id' => $refund->id,
-                    'amount' => $refund->amount,
-                    'reason' => $refund->reason,
-                    'status' => $refund->status,
-                    'created_at' => $refund->created_at,
-                ])->values(),
+                // ->all() (plain array, not Collection): PHPStan/Larastan
+                // false-positives a "Template type TValue on Collection is
+                // not covariant" error when a Collection-typed value sits
+                // inside the array shape returned by an outer ->map()
+                // closure — reproduces even with no Eloquent/nullability
+                // involved. json_encode()'s output is identical either way;
+                // this sidesteps the nested-generic check entirely.
+                'refunds' => ($refundsByPayment->get($payment->id) ?? collect())
+                    ->map(fn (Refund $refund) => [
+                        'id' => $refund->id,
+                        'amount' => $refund->amount,
+                        'reason' => $refund->reason,
+                        'status' => $refund->status,
+                        'created_at' => $refund->created_at,
+                    ])
+                    ->values()
+                    ->all(),
             ]),
             'payment_mandates' => $mandates->map(fn (PaymentMandate $mandate) => [
                 'id' => $mandate->id,
