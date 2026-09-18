@@ -71,6 +71,7 @@ export interface OwnerAppointmentDetail {
   status: string
   starts_at: string
   ends_at: string
+  customer_id: string | null
   customer_name: string | null
   customer_email: string | null
   customer_phone: string | null
@@ -84,6 +85,133 @@ export interface OwnerAppointmentDetail {
   payments: OwnerPayment[]
   reminders: OwnerReminder[]
   events: OwnerBookingEvent[]
+}
+
+// 05-api-contracts.md endpoint 5 (D-0056) — POST .../appointments/{id}/refund
+export interface OwnerRefund {
+  id: string
+  payment_id: string
+  amount: number
+  reason: string | null
+  status: string
+}
+
+export interface RefundResponse {
+  refund: OwnerRefund
+  payment_status: string
+}
+
+// endpoint 6 (D-0057) — POST .../appointments/{id}/balance/charge. Both
+// shapes are real `200` responses (never a 4xx) — a declined/SCA-blocked
+// off-session charge is an expected business outcome, not an error.
+export interface BalanceChargeSucceeded {
+  status: 'succeeded'
+  payment_id: string
+}
+
+export interface BalanceChargeFailed {
+  status: 'failed'
+  failure_code: string
+  fallback_action: string
+}
+
+export type BalanceChargeResponse = BalanceChargeSucceeded | BalanceChargeFailed
+
+// endpoint 10 (D-0058) — Stripe Connect Express onboarding.
+export interface OnboardingLinkResponse {
+  url: string
+  expires_at: number
+}
+
+export interface ConnectStatus {
+  status: 'not_started' | 'pending' | 'complete' | 'restricted'
+  charges_enabled: boolean
+  details_submitted: boolean
+}
+
+// endpoint 11 (D-0059) — customer export/erasure.
+export interface CustomerRecord {
+  id: string
+  name: string
+  email: string
+  phone: string | null
+  notes: string | null
+  erasure_requested_at: string | null
+  created_at: string
+}
+
+export interface CustomerExportAppointment {
+  id: string
+  service_name: string | null
+  staff_name: string | null
+  starts_at: string
+  ends_at: string
+  status: string
+  cancelled_by: string | null
+  cancelled_reason: string | null
+  cancelled_at: string | null
+  notes: string | null
+  created_at: string
+}
+
+export interface CustomerExportRefund {
+  id: string
+  amount: number
+  reason: string | null
+  status: string
+  created_at: string
+}
+
+export interface CustomerExportPayment {
+  id: string
+  appointment_id: string
+  type: string
+  status: string
+  amount: number
+  currency: string
+  failure_code: string | null
+  created_at: string
+  refunds: CustomerExportRefund[]
+}
+
+export interface CustomerExportMandate {
+  id: string
+  appointment_id: string
+  mandate_text: string
+  mandate_template_version: string
+  balance_amount_disclosed: number
+  accepted_at: string
+  accepted_ip: string | null
+  accepted_user_agent: string | null
+}
+
+export interface CustomerExportEvent {
+  appointment_id: string | null
+  event_type: string
+  from_status: string | null
+  to_status: string | null
+  created_at: string
+}
+
+export interface CustomerExport {
+  customer: CustomerRecord
+  appointments: CustomerExportAppointment[]
+  payments: CustomerExportPayment[]
+  payment_mandates: CustomerExportMandate[]
+  booking_events: CustomerExportEvent[]
+}
+
+export interface CustomerErasureResponse {
+  id: string
+  name: string
+  email: string
+  phone: string | null
+  erasure_requested_at: string | null
+}
+
+export interface ReinviteResponse {
+  status: string
+  channel: string
 }
 
 export interface NotificationLogEntry {

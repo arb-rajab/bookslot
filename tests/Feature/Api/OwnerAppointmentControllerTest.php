@@ -92,6 +92,7 @@ test('an owner sees appointments across every staff member in their tenant, with
     expect($ids)->not->toContain($foreignAppointment->id);
 
     $rowA = $appointments->firstWhere('id', $appointmentA->id);
+    expect($rowA['customer_id'])->toBe($appointmentA->customer_id);
     expect($rowA['customer_name'])->not->toBeNull();
     expect($rowA['service_name'])->not->toBeNull();
     expect($rowA['staff_name'])->not->toBeNull();
@@ -299,7 +300,7 @@ test('an owner sees full detail on one appointment: payments, reminders, and the
     ]);
 
     $response->assertOk();
-    $response->assertJson(['id' => $appointment->id, 'deposit_status' => 'succeeded']);
+    $response->assertJson(['id' => $appointment->id, 'customer_id' => $appointment->customer_id, 'deposit_status' => 'succeeded']);
     expect($response->json('customer_email'))->not->toBeNull();
     expect(collect($response->json('payments')))->toHaveCount(1);
     expect(collect($response->json('reminders')))->toHaveCount(1);

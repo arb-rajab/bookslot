@@ -76,11 +76,12 @@ test that fails if it regresses — not merely coded and assumed correct.
       (D-0036), independent of the appointment's own status (J8's dispute
       path, not only J7's post-cancellation path), a one-shot action per
       payment per `04`'s state machine, a `booking_events` audit row
-      (`refund_issued`). No owner-admin UI trigger built this session —
-      `05-api-contracts.md` documents only the API contract, and no
-      frontend page or Playwright spec names a refund button as in scope;
-      the existing appointment-detail page's cancel-button copy explicitly
-      still calls a deposit refund "a separate, not-yet-built capability."
+      (`refund_issued`). **Owner-admin UI built Session 36 (D-0062):** a
+      "Refund deposit" section on the owner appointment-detail page,
+      shown only while the deposit is actually refundable, gated behind an
+      explicit confirm step before the request fires — see D-0062 for the
+      full placement/confirmation reasoning shared across all five UI
+      triggers this session added.
 - [x] **Owner-initiated customer re-invite** (FR-23/D-0014, `05`'s endpoint
       9 — already specified since Sessions 5-7, just never built) —
       `POST /api/owner/customers/{id}/re-invite` (D-0060, Session 30): a
@@ -92,9 +93,11 @@ test that fails if it regresses — not merely coded and assumed correct.
       send, never deduplicated against a prior one (the opposite of
       refund/status-update's one-shot shape) — which required narrowing
       D-0050's reminder fire-once unique index to a partial index excluding
-      this one purpose. No owner-admin UI trigger built this session, same
-      scoping as D-0056/D-0057/D-0058 — `05-api-contracts.md` documents
-      only the API contract.
+      this one purpose. **Owner-admin UI built Session 36 (D-0062):** a
+      "Send re-invite" button on the new owner customer-detail page, with a
+      read-only "last invited" line derived from already-loaded
+      `booking_events` — never a cooldown or dedup of any kind, matching
+      this endpoint's own by-design repeatability.
 - [x] **Owner-initiated off-session balance charge** (J5, `05`'s endpoint 6,
       the item named unbuilt below through Session 26) — `POST /api/owner/
       appointments/{id}/balance/charge` (D-0057, Session 27): a real
@@ -110,9 +113,13 @@ test that fails if it regresses — not merely coded and assumed correct.
       Owner-initiated only, via this dedicated route — the "studio policy
       is auto-charge" trigger J5's prose describes was never built (no
       such policy column exists on `tenants`/`services`), matching D-0056's
-      own reasoning for why refund is explicit-owner-action-only too. No
-      owner-admin UI trigger built this session, same scoping as D-0056's
-      refund — `05-api-contracts.md` documents only the API contract.
+      own reasoning for why refund is explicit-owner-action-only too.
+      **Owner-admin UI built Session 36 (D-0062):** a plain "Charge
+      remaining balance" button on the owner appointment-detail page — no
+      amount input, no auto-charge-policy toggle of any kind, per D-0061 —
+      behind the same confirm step as refund, with the endpoint's two real
+      `200` outcomes (succeeded / declined-and-retriable) rendered
+      distinctly from a genuine `502` provider failure.
 - [x] **The reconciliation safeguard for R-07** — `mandates:reconcile-backfill`
       (D-0037), scheduled hourly, flags any `payment_mandates` row whose
       `stripe_payment_method_id` sits `NULL` past a reasoned 30-minute grace
@@ -198,15 +205,18 @@ migration, a route, or a stub controller behind it.
       Account Link generation/refresh, and a live status-check endpoint
       (`05-api-contracts.md` endpoint 10), plus `account.updated`/
       `account.application.deauthorized` webhook handling keeping
-      `tenants.stripe_onboarding_status` current. Backend-only — no
-      frontend settings page or Playwright coverage exists yet (same
-      "no frontend coverage needed for this session's scope" conclusion
-      D-0056/D-0057 already reached; `services.stripe
-      .connect_onboarding_redirect_url` points at a `/owner/settings/stripe`
-      frontend route that does not exist yet, a real named gap for a
-      future session). No account-replacement flow after a deauthorized
-      Connect account exists either — a separately-scoped, undesigned
-      feature.
+      `tenants.stripe_onboarding_status` current. **Owner-admin UI built
+      Session 36 (D-0062):** `/owner/settings/stripe`, the exact frontend
+      route `services.stripe.connect_onboarding_redirect_url` was already
+      configured to point at since Session 28 — a live status display (all
+      four classified states) plus a "start/resume/refresh onboarding"
+      action that redirects the browser straight to Stripe's own hosted
+      page (real navigation, never rendered as an in-app result, since a
+      redirect back doesn't itself prove onboarding finished — the page
+      re-checks live status on return rather than trusting the query
+      string). No account-replacement flow after a deauthorized Connect
+      account exists either — a separately-scoped, undesigned feature,
+      unchanged by this session.
 
 ### Permanently unverifiable by deliberate project-scope choice
 

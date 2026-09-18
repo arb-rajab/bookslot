@@ -747,3 +747,79 @@ of preference:
   205/205, `./vendor/bin/pint --test` clean, `npx vue-tsc --noEmit` clean.
   Confirmed rather than assumed, since the task explicitly asked for a
   real run, not an inference from the diff's file list.
+
+## Session 36 additions — owner-admin UI triggers for refund/balance-charge/
+  Connect/erasure/re-invite; a Vitest false-negative found by real-browser
+  verification, and dev-server host-binding/process-cleanup notes
+
+- **A component test whose mock server always returns the SAME fixture
+  regardless of what the mutating request under test actually did will not
+  catch a bug that only manifests after that request's own follow-up
+  reload.** This session's first version of the appointment-detail page's
+  new "Refund deposit" section gated the entire section — including the
+  post-refund success message — on there still being a `succeeded` deposit
+  payment. The page reloads its own detail data after a successful refund
+  (so the payments table reflects the new `refunded` status immediately),
+  which makes that condition go false the same render cycle the success
+  message was supposed to appear in — hiding it instantly. The Vitest test
+  written first (mounting the page against a local mock HTTP server, same
+  pattern as every other owner-admin form test in this repo) did not catch
+  this, because its mock route for the appointment-detail GET always
+  returned the same static pre-refund fixture, every time it was called,
+  including the reload that follows the refund POST — so the "is there
+  still a refundable deposit" condition the bug depended on never actually
+  changed state inside that test. It was found only by driving the real
+  page against the real Laravel backend in a real (pre-installed) Chromium
+  browser and watching the message flash and disappear. **If a mutating
+  action's own test also exercises a reload/refetch afterward, make the
+  mock's response for that GET route reflect the POST/PATCH's expected
+  effect (change the route's returned body once the mutation "happens"),
+  not the same fixture every time** — otherwise the test can look
+  thorough while structurally being unable to catch exactly this class of
+  bug. This repo's fast Vitest suite is fully mocked-HTTP by design (no
+  real backend), which is why the real-browser pass remains genuinely
+  load-bearing verification, not a formality, for any change to a page
+  that reloads its own state after a mutation.
+- **Starting `php artisan serve`/`npm run dev` for a manual/ad hoc
+  real-browser check needs the same explicit `--host=localhost` (never the
+  default bind, and never `127.0.0.1`) that `playwright.config.ts`'s own
+  `webServer` entries already use** — Session 23's documented
+  localhost-vs-127.0.0.1 cookie-scoping gotcha applies identically to a
+  manually started pair of dev servers, not just to Playwright's own
+  auto-launched ones. Starting either server without `--host=localhost`
+  first (this session's own first attempt) produced a server that
+  technically answered on `localhost` for a plain `curl` health check
+  (loopback resolves the same either way) but was still the wrong bind for
+  the Sanctum SPA cookie flow once a real browser session got involved.
+- **`pkill -f "artisan serve"` (or any `pkill`/broad-pattern kill) run from
+  this Bash tool can itself return a nonzero/unusual exit code (144 seen
+  this session) even when it successfully signals the target** — don't
+  chain further commands after it with `&&`, since that can make an
+  otherwise-successful cleanup step look like a failure and abort the rest
+  of the chain. Check with a fresh `ps aux | grep ...` afterward (a
+  separate command) rather than trusting the exit code of the `pkill`
+  invocation itself; if processes remain, `kill -9 <pid>` on the specific
+  PIDs from that `ps` output is the reliable fallback, used this session.
+- **A dev-server manual verification pass belongs in a throwaway spec file
+  placed temporarily inside `tests/e2e/` (so it can reuse
+  `support/booking.ts`'s existing fixtures/login helpers and
+  `playwright.config.ts`'s existing project config) and deleted before
+  committing** — trying to run a Playwright spec from outside `testDir`
+  (e.g. the scratchpad directory) fights the config for no benefit, since
+  the config's own `webServer`/`baseURL`/`launchOptions` are exactly what
+  a real manual check needs too. Remember to `rm` both the temp spec file
+  and the `test-results/`/`playwright-report/` directories it generates
+  before checking `git status` — neither is meant to be committed, and
+  neither is gitignored by name alone (they simply aren't tracked because
+  no prior session ever committed one), so an inattentive `git add -A`
+  could pull them in.
+- **When a manual verification flow reuses the SAME booking/appointment
+  for two actions that are mutually exclusive on the backend (e.g. this
+  session's first attempt: refunding a deposit, then trying to
+  balance-charge the same appointment), the second action fails against
+  the real backend's own eligibility rule (here, `DEPOSIT_NOT_CAPTURED`,
+  since the deposit was already refunded) — not a bug, just an unrealistic
+  test scenario.** Create a separate booking per action being manually
+  verified when the actions have real state preconditions that conflict,
+  the same way the Pest/Playwright suites already do with their own
+  per-test fixtures.

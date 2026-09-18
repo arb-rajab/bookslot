@@ -102,7 +102,10 @@ function statusLabel(status: string): string {
         <tbody>
           <tr v-for="appointment in upcoming" :key="appointment.id">
             <td><NuxtLink :to="`/owner/appointments/${appointment.id}`">{{ formatDateTime(appointment.starts_at) }}</NuxtLink></td>
-            <td>{{ appointment.customer_name }}</td>
+            <td>
+              <NuxtLink v-if="appointment.customer_id" :to="`/owner/customers/${appointment.customer_id}`">{{ appointment.customer_name }}</NuxtLink>
+              <template v-else>{{ appointment.customer_name }}</template>
+            </td>
             <td>{{ appointment.service_name }}</td>
             <td>{{ appointment.staff_name }}</td>
             <td>{{ statusLabel(appointment.status) }}</td>
@@ -138,7 +141,10 @@ function statusLabel(status: string): string {
         <tbody>
           <tr v-for="appointment in past" :key="appointment.id">
             <td><NuxtLink :to="`/owner/appointments/${appointment.id}`">{{ formatDateTime(appointment.starts_at) }}</NuxtLink></td>
-            <td>{{ appointment.customer_name }}</td>
+            <td>
+              <NuxtLink v-if="appointment.customer_id" :to="`/owner/customers/${appointment.customer_id}`">{{ appointment.customer_name }}</NuxtLink>
+              <template v-else>{{ appointment.customer_name }}</template>
+            </td>
             <td>{{ appointment.service_name }}</td>
             <td>{{ appointment.staff_name }}</td>
             <td>{{ statusLabel(appointment.status) }}</td>

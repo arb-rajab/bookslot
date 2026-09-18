@@ -597,7 +597,16 @@ class AppointmentController extends Controller
         return response()->json($this->present($appointment->fresh(['customer', 'service', 'staff'])));
     }
 
-    /** @return array<string, mixed> */
+    /**
+     * `customer_id` (Session 36) is the one additive field this shared
+     * projection gained to let the new owner-admin UI link an appointment
+     * row to `/owner/customers/{id}` (erasure/export/re-invite) without a
+     * new endpoint — every existing consumer already tolerates unknown
+     * response keys (no `assertExactJson` anywhere in this controller's
+     * tests), so this is safe on both `index()` and `show()`/`presentDetail()`.
+     *
+     * @return array<string, mixed>
+     */
     private function present(Appointment $appointment): array
     {
         $depositStatus = Payment::query()
@@ -610,6 +619,7 @@ class AppointmentController extends Controller
             'status' => $appointment->status,
             'starts_at' => $appointment->starts_at,
             'ends_at' => $appointment->ends_at,
+            'customer_id' => $appointment->customer_id,
             'customer_name' => $appointment->customer?->name,
             'service_name' => $appointment->service?->name,
             'staff_name' => $appointment->staff?->display_name,
