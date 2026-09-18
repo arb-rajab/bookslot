@@ -11,7 +11,7 @@ const loading = ref(true)
 const loadError = ref<string | null>(null)
 const cancelReason = ref('')
 const cancelling = ref(false)
-const cancelError = ref<string | null>(null)
+const { formError: cancelError, fieldError: cancelFieldError, clear: clearCancelFormErrors, applyError: applyCancelFormError } = useFormErrors()
 
 onMounted(load)
 
@@ -32,7 +32,7 @@ const cancellable = computed(() => detail.value?.status === 'pending_payment' ||
 
 async function cancelAppointment(): Promise<void> {
   cancelling.value = true
-  cancelError.value = null
+  clearCancelFormErrors()
 
   try {
     detail.value = await apiFetch<OwnerAppointmentDetail>(`/owner/appointments/${appointmentId}/cancel`, {
@@ -40,7 +40,7 @@ async function cancelAppointment(): Promise<void> {
       body: { reason: cancelReason.value || null },
     })
   } catch (e) {
-    cancelError.value = describeError(apiErrorBody(e).error)
+    applyCancelFormError(e, describeError)
   } finally {
     cancelling.value = false
   }
@@ -50,6 +50,7 @@ function describeError(code: string): string {
   const messages: Record<string, string> = {
     NOT_FOUND: 'That appointment could not be found.',
     INVALID_STATUS_TRANSITION: 'This appointment can no longer be cancelled.',
+    VALIDATION_FAILED: 'Please check the highlighted fields.',
     NETWORK_ERROR: 'Could not reach the booking server. Is the API running?',
   }
   return messages[code] ?? `Something went wrong (${code}).`
@@ -154,7 +155,10 @@ function statusLabel(status: string): string {
         </p>
         <p v-if="cancelError" class="error">{{ cancelError }}</p>
         <div class="cancel-form">
-          <input v-model="cancelReason" type="text" placeholder="Reason (optional)" />
+          <div class="field-with-error">
+            <input v-model="cancelReason" type="text" placeholder="Reason (optional)" />
+            <span v-if="cancelFieldError('reason')" class="field-error">{{ cancelFieldError('reason') }}</span>
+          </div>
           <button type="button" class="danger" :disabled="cancelling" @click="cancelAppointment">
             {{ cancelling ? 'Cancelling…' : 'Cancel appointment' }}
           </button>
@@ -226,6 +230,19 @@ dd {
   flex: 1;
   min-width: 200px;
   padding: 0.5rem;
+}
+
+.field-with-error {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  flex: 1;
+  min-width: 200px;
+}
+
+.field-error {
+  color: #b3261e;
+  font-size: 0.85rem;
 }
 
 button {

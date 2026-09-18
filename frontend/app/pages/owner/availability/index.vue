@@ -13,6 +13,12 @@ const staffError = ref<string | null>(null)
 
 const newStaffName = ref('')
 const creatingStaff = ref(false)
+const {
+  formError: staffFormError,
+  fieldError: staffFieldError,
+  clear: clearStaffFormErrors,
+  applyError: applyStaffFormError,
+} = useFormErrors()
 
 const selectedStaffId = ref<string | null>(null)
 
@@ -21,11 +27,26 @@ const week = ref<DayRow[]>(DAY_NAMES.map(() => ({ enabled: false, start_time: '0
 const loadingHours = ref(false)
 const savingHours = ref(false)
 const hoursError = ref<string | null>(null)
+const {
+  formError: hoursFormError,
+  fieldError: hoursFieldError,
+  otherFieldErrors: otherHoursFieldErrors,
+  clear: clearHoursFormErrors,
+  applyError: applyHoursFormError,
+} = useFormErrors()
 
 const exceptions = ref<AvailabilityException[]>([])
 const loadingExceptions = ref(false)
 const exceptionError = ref<string | null>(null)
 const newException = ref({ date: '', is_available: false, reason: '' })
+const {
+  formError: exceptionFormError,
+  fieldError: exceptionFieldError,
+  otherFieldErrors: otherExceptionFieldErrors,
+  clear: clearExceptionFormErrors,
+  applyError: applyExceptionFormError,
+} = useFormErrors()
+const KNOWN_EXCEPTION_FIELDS = ['date', 'is_available', 'start_time', 'end_time', 'reason']
 
 watchEffect(() => {
   if (authState.value === 'authenticated' && staff.value.length === 0 && !loadingStaff.value) {
@@ -53,7 +74,7 @@ async function loadStaff(): Promise<void> {
 async function createStaff(): Promise<void> {
   if (!newStaffName.value.trim()) return
   creatingStaff.value = true
-  staffError.value = null
+  clearStaffFormErrors()
 
   try {
     const created = await apiFetch<OwnerStaff>('/owner/staff', { method: 'POST', body: { display_name: newStaffName.value } })
@@ -61,7 +82,7 @@ async function createStaff(): Promise<void> {
     newStaffName.value = ''
     selectStaff(created.id)
   } catch (e) {
-    staffError.value = describeError(apiErrorBody(e).error)
+    applyStaffFormError(e, describeError)
   } finally {
     creatingStaff.value = false
   }
@@ -89,10 +110,33 @@ async function loadWorkingHours(staffId: string): Promise<void> {
   }
 }
 
+/**
+ * The PUT body only carries enabled days, in week order — its own index
+ * (0, 1, 2, …) is what the backend's `working_hours.{index}.{field}`
+ * validation-error keys refer to, which is NOT the same as `day_of_week`
+ * once any day is disabled. This maps a visible day-of-week index back to
+ * its position in that submitted array so an error for, say, the second
+ * enabled day lands on the right row rather than the wrong one.
+ */
+const enabledDayIndexes = computed(() => week.value.map((row, day) => (row.enabled ? day : null)).filter((day): day is number => day !== null))
+
+function workingHourFieldError(dayOfWeek: number, field: 'start_time' | 'end_time'): string | null {
+  const payloadIndex = enabledDayIndexes.value.indexOf(dayOfWeek)
+  return payloadIndex === -1 ? null : hoursFieldError(`working_hours.${payloadIndex}.${field}`)
+}
+
+function knownHoursFields(): string[] {
+  return ['working_hours', ...enabledDayIndexes.value.flatMap((_, index) => [
+    `working_hours.${index}.day_of_week`,
+    `working_hours.${index}.start_time`,
+    `working_hours.${index}.end_time`,
+  ])]
+}
+
 async function saveWorkingHours(): Promise<void> {
   if (!selectedStaffId.value) return
   savingHours.value = true
-  hoursError.value = null
+  clearHoursFormErrors()
 
   const workingHours = week.value
     .map((row, day_of_week) => ({ ...row, day_of_week }))
@@ -105,7 +149,7 @@ async function saveWorkingHours(): Promise<void> {
       body: { working_hours: workingHours },
     })
   } catch (e) {
-    hoursError.value = describeError(apiErrorBody(e).error)
+    applyHoursFormError(e, describeError)
   } finally {
     savingHours.value = false
   }
@@ -127,7 +171,7 @@ async function loadExceptions(staffId: string): Promise<void> {
 
 async function addException(): Promise<void> {
   if (!selectedStaffId.value || !newException.value.date) return
-  exceptionError.value = null
+  clearExceptionFormErrors()
 
   try {
     const created = await apiFetch<AvailabilityException>(`/owner/staff/${selectedStaffId.value}/availability-exceptions`, {
@@ -137,7 +181,7 @@ async function addException(): Promise<void> {
     exceptions.value.push(created)
     newException.value = { date: '', is_available: false, reason: '' }
   } catch (e) {
-    exceptionError.value = describeError(apiErrorBody(e).error)
+    applyExceptionFormError(e, describeError)
   }
 }
 
@@ -189,6 +233,8 @@ function describeError(code: string): string {
           <input v-model="newStaffName" type="text" placeholder="New staff name" />
           <button type="submit" :disabled="creatingStaff">Add</button>
         </form>
+        <p v-if="staffFormError" class="error">{{ staffFormError }}</p>
+        <span v-if="staffFieldError('display_name')" class="field-error">{{ staffFieldError('display_name') }}</span>
       </aside>
 
       <section v-if="selectedStaffId" class="detail">
@@ -197,15 +243,27 @@ function describeError(code: string): string {
           <p v-if="hoursError" class="error">{{ hoursError }}</p>
           <p v-if="loadingHours">Loading…</p>
           <template v-else>
+            <p v-if="hoursFormError" class="error">{{ hoursFormError }}</p>
+            <ul v-if="otherHoursFieldErrors(knownHoursFields()).length > 0" class="error field-error-list">
+              <li v-for="message in otherHoursFieldErrors(knownHoursFields())" :key="message">{{ message }}</li>
+            </ul>
             <div v-for="(day, index) in week" :key="index" class="day-row">
               <label class="day-toggle">
                 <input v-model="day.enabled" type="checkbox" />
                 {{ DAY_NAMES[index] }}
               </label>
               <template v-if="day.enabled">
-                <input v-model="day.start_time" type="time" />
-                <span>to</span>
-                <input v-model="day.end_time" type="time" />
+                <div class="day-times">
+                  <div class="day-time-field">
+                    <input v-model="day.start_time" type="time" />
+                    <span v-if="workingHourFieldError(index, 'start_time')" class="field-error">{{ workingHourFieldError(index, 'start_time') }}</span>
+                  </div>
+                  <span>to</span>
+                  <div class="day-time-field">
+                    <input v-model="day.end_time" type="time" />
+                    <span v-if="workingHourFieldError(index, 'end_time')" class="field-error">{{ workingHourFieldError(index, 'end_time') }}</span>
+                  </div>
+                </div>
               </template>
             </div>
             <button type="button" :disabled="savingHours" @click="saveWorkingHours">
@@ -231,10 +289,20 @@ function describeError(code: string): string {
           </table>
           <p v-else class="muted">No exceptions on record.</p>
 
+          <p v-if="exceptionFormError" class="error">{{ exceptionFormError }}</p>
+          <ul v-if="otherExceptionFieldErrors(KNOWN_EXCEPTION_FIELDS).length > 0" class="error field-error-list">
+            <li v-for="message in otherExceptionFieldErrors(KNOWN_EXCEPTION_FIELDS)" :key="message">{{ message }}</li>
+          </ul>
           <form class="add-exception" @submit.prevent="addException">
-            <input v-model="newException.date" type="date" required />
+            <div class="field-with-error">
+              <input v-model="newException.date" type="date" required />
+              <span v-if="exceptionFieldError('date')" class="field-error">{{ exceptionFieldError('date') }}</span>
+            </div>
             <label><input v-model="newException.is_available" type="checkbox" /> Available (unusual open day)</label>
-            <input v-model="newException.reason" type="text" placeholder="Reason (optional)" />
+            <div class="field-with-error">
+              <input v-model="newException.reason" type="text" placeholder="Reason (optional)" />
+              <span v-if="exceptionFieldError('reason')" class="field-error">{{ exceptionFieldError('reason') }}</span>
+            </div>
             <button type="submit">Add exception</button>
           </form>
         </div>
@@ -256,6 +324,34 @@ function describeError(code: string): string {
   border-radius: 6px;
   padding: 0.75rem 1rem;
   margin: 1rem 0;
+}
+
+.field-error-list {
+  margin: 0.5rem 0;
+  padding-left: 1.25rem;
+}
+
+.field-error {
+  color: #b3261e;
+  font-size: 0.85rem;
+}
+
+.field-with-error {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.day-times {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.day-time-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
 }
 
 .layout {

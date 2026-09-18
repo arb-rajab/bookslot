@@ -10,8 +10,13 @@ const loading = ref(false)
 const listError = ref<string | null>(null)
 
 const editingId = ref<string | null>(null)
-const formError = ref<string | null>(null)
+const { formError, fieldError, otherFieldErrors, clear: clearFormErrors, applyError: applyFormError } = useFormErrors()
 const saving = ref(false)
+
+const KNOWN_FIELDS = [
+  'name', 'duration_minutes', 'price_amount', 'currency', 'deposit_type',
+  'deposit_fixed_amount', 'deposit_percentage_bps', 'buffer_before_minutes', 'buffer_after_minutes',
+]
 
 const blankForm = () => ({
   name: '',
@@ -51,7 +56,7 @@ async function loadServices(): Promise<void> {
 function startCreate(): void {
   editingId.value = null
   form.value = blankForm()
-  formError.value = null
+  clearFormErrors()
   showForm.value = true
 }
 
@@ -68,13 +73,13 @@ function startEdit(service: OwnerService): void {
     buffer_before_minutes: service.buffer_before_minutes,
     buffer_after_minutes: service.buffer_after_minutes,
   }
-  formError.value = null
+  clearFormErrors()
   showForm.value = true
 }
 
 async function submitForm(): Promise<void> {
   saving.value = true
-  formError.value = null
+  clearFormErrors()
 
   const body: Record<string, unknown> = {
     name: form.value.name,
@@ -102,7 +107,7 @@ async function submitForm(): Promise<void> {
     }
     showForm.value = false
   } catch (e) {
-    formError.value = describeError(apiErrorBody(e).error)
+    applyFormError(e, describeError)
   } finally {
     saving.value = false
   }
@@ -182,11 +187,26 @@ function formatAmount(amount: number, currency: string): string {
       <form class="modal card" @submit.prevent="submitForm">
         <h2>{{ editingId ? 'Edit service' : 'New service' }}</h2>
         <p v-if="formError" class="error">{{ formError }}</p>
+        <ul v-if="otherFieldErrors(KNOWN_FIELDS).length > 0" class="error field-error-list">
+          <li v-for="message in otherFieldErrors(KNOWN_FIELDS)" :key="message">{{ message }}</li>
+        </ul>
 
-        <label>Name<input v-model="form.name" type="text" required /></label>
-        <label>Duration (minutes)<input v-model.number="form.duration_minutes" type="number" min="1" required /></label>
-        <label>Price (cents)<input v-model.number="form.price_amount" type="number" min="0" required /></label>
-        <label>Currency<input v-model="form.currency" type="text" maxlength="3" required /></label>
+        <label>
+          Name<input v-model="form.name" type="text" required />
+          <span v-if="fieldError('name')" class="field-error">{{ fieldError('name') }}</span>
+        </label>
+        <label>
+          Duration (minutes)<input v-model.number="form.duration_minutes" type="number" min="1" required />
+          <span v-if="fieldError('duration_minutes')" class="field-error">{{ fieldError('duration_minutes') }}</span>
+        </label>
+        <label>
+          Price (cents)<input v-model.number="form.price_amount" type="number" min="0" required />
+          <span v-if="fieldError('price_amount')" class="field-error">{{ fieldError('price_amount') }}</span>
+        </label>
+        <label>
+          Currency<input v-model="form.currency" type="text" maxlength="3" required />
+          <span v-if="fieldError('currency')" class="field-error">{{ fieldError('currency') }}</span>
+        </label>
 
         <label>
           Deposit type
@@ -194,18 +214,27 @@ function formatAmount(amount: number, currency: string): string {
             <option value="fixed">Fixed</option>
             <option value="percentage">Percentage</option>
           </select>
+          <span v-if="fieldError('deposit_type')" class="field-error">{{ fieldError('deposit_type') }}</span>
         </label>
         <label v-if="form.deposit_type === 'fixed'">
           Deposit amount (cents)
           <input v-model.number="form.deposit_fixed_amount" type="number" min="0" required />
+          <span v-if="fieldError('deposit_fixed_amount')" class="field-error">{{ fieldError('deposit_fixed_amount') }}</span>
         </label>
         <label v-else>
           Deposit percentage (basis points)
           <input v-model.number="form.deposit_percentage_bps" type="number" min="0" required />
+          <span v-if="fieldError('deposit_percentage_bps')" class="field-error">{{ fieldError('deposit_percentage_bps') }}</span>
         </label>
 
-        <label>Buffer before (minutes)<input v-model.number="form.buffer_before_minutes" type="number" min="0" max="1440" required /></label>
-        <label>Buffer after (minutes)<input v-model.number="form.buffer_after_minutes" type="number" min="0" max="1440" required /></label>
+        <label>
+          Buffer before (minutes)<input v-model.number="form.buffer_before_minutes" type="number" min="0" max="1440" required />
+          <span v-if="fieldError('buffer_before_minutes')" class="field-error">{{ fieldError('buffer_before_minutes') }}</span>
+        </label>
+        <label>
+          Buffer after (minutes)<input v-model.number="form.buffer_after_minutes" type="number" min="0" max="1440" required />
+          <span v-if="fieldError('buffer_after_minutes')" class="field-error">{{ fieldError('buffer_after_minutes') }}</span>
+        </label>
 
         <div class="modal-actions">
           <button type="button" class="secondary" @click="showForm = false">Cancel</button>
@@ -236,6 +265,16 @@ function formatAmount(amount: number, currency: string): string {
   border-radius: 6px;
   padding: 0.75rem 1rem;
   margin: 1rem 0;
+}
+
+.field-error-list {
+  margin: 0.5rem 0;
+  padding-left: 1.25rem;
+}
+
+.field-error {
+  color: #b3261e;
+  font-size: 0.85rem;
 }
 
 .data-table {
