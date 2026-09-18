@@ -36,8 +36,9 @@ final class MandateRenderer
         $text = sprintf(
             'You are booking "%s" with %s. A deposit of %s %s is being charged now to hold '.
             'your appointment. If you do not attend (a no-show), this deposit will be forfeited '.
-            'per %s\'s policy. The remaining balance of %s %s will be automatically charged to '.
-            'this same payment method once your appointment is marked completed.',
+            'per %s\'s policy. Once your appointment is marked completed, the remaining balance '.
+            'of %s %s may be charged to this same payment method, or collected another way, at '.
+            '%s\'s discretion.',
             $service->name,
             $tenant->name,
             $this->formatAmount($depositAmount),
@@ -45,6 +46,7 @@ final class MandateRenderer
             $tenant->name,
             $this->formatAmount($balanceAmount),
             strtoupper($service->currency),
+            $tenant->name,
         );
 
         return [
