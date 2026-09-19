@@ -117,8 +117,8 @@ an explicit transaction) — only the read-side comparison.
 | slug | text | no | | Unique, used in the public booking page path |
 | timezone | text | no | | IANA zone, e.g. `America/Toronto` — studio-level minimum per this session's scope |
 | currency | char(3) | no | | ISO 4217, e.g. `usd`. Single currency per tenant at MVP (multi-currency is a non-goal per `01`), but stored per-tenant now so it isn't a painful migration later |
-| stripe_connect_account_id | text | yes | null | Set once Connect onboarding completes |
-| stripe_onboarding_status | text | no | `'not_started'` | `not_started, pending, complete, restricted` |
+| stripe_connect_account_id | text | yes | null | Set when Connect onboarding starts; cleared back to null on `account.application.deauthorized` (D-0065) so a fresh account can be created — no longer a permanent historical record |
+| stripe_onboarding_status | text | no | `'not_started'` | `not_started, pending, complete, restricted, deauthorized` (D-0065 added `deauthorized`) — `restricted` is a still-connected account Stripe has flagged; `deauthorized` is a fully revoked connection with `stripe_connect_account_id` cleared, needing a brand new account |
 | deleted_at | timestamptz | yes | null | Soft delete — see Soft/hard delete matrix |
 | created_at, updated_at | timestamptz | no | `now()` | |
 

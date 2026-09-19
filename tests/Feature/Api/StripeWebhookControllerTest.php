@@ -413,7 +413,7 @@ test('D-0058: account.updated only ever touches the tenant its own metadata.tena
     expect(Tenant::query()->find($tenantB->id)->stripe_onboarding_status)->toBe('pending');
 });
 
-test('D-0058: account.application.deauthorized resolves the tenant via its Connect account id and marks it restricted, untouched by metadata', function () {
+test('D-0065: account.application.deauthorized resolves the tenant via its Connect account id, marks it deauthorized (not restricted), and clears the stale account id so reconnection is possible', function () {
     $tenantA = Tenant::factory()->create(['stripe_connect_account_id' => 'acct_deauthorized_a', 'stripe_onboarding_status' => 'complete']);
     $tenantB = Tenant::factory()->create(['stripe_connect_account_id' => 'acct_deauthorized_b', 'stripe_onboarding_status' => 'complete']);
 
@@ -424,8 +424,39 @@ test('D-0058: account.application.deauthorized resolves the tenant via its Conne
     $response->assertOk();
     $response->assertJson(['status' => 'accepted']);
 
-    expect(Tenant::query()->find($tenantA->id)->stripe_onboarding_status)->toBe('restricted');
-    expect(Tenant::query()->find($tenantB->id)->stripe_onboarding_status)->toBe('complete');
+    $refreshedA = Tenant::query()->find($tenantA->id);
+    expect($refreshedA->stripe_onboarding_status)->toBe('deauthorized');
+    expect($refreshedA->stripe_connect_account_id)->toBeNull();
+
+    $refreshedB = Tenant::query()->find($tenantB->id);
+    expect($refreshedB->stripe_onboarding_status)->toBe('complete');
+    expect($refreshedB->stripe_connect_account_id)->toBe('acct_deauthorized_b');
+});
+
+test('D-0065: a stale account.updated for a tenant\'s previous, no-longer-current account id is skipped rather than overwriting its post-reconnection status', function () {
+    $tenant = Tenant::factory()->create(['stripe_connect_account_id' => 'acct_new_current', 'stripe_onboarding_status' => 'pending']);
+
+    // A late-arriving event about the OLD account this tenant is no longer
+    // linked to (metadata.tenant_id on that old Stripe Account object still
+    // points here, but stripe_connect_account_id has since moved on).
+    $stalePayload = accountUpdatedEventPayload('acct_old_no_longer_linked', $tenant->id, [
+        'charges_enabled' => true,
+        'details_submitted' => true,
+    ]);
+
+    postRawSignedWebhook($stalePayload)->assertOk()->assertJson(['status' => 'accepted']);
+
+    expect(Tenant::query()->find($tenant->id)->stripe_onboarding_status)->toBe('pending');
+
+    // A genuine event about the CURRENT account still applies normally.
+    $currentPayload = accountUpdatedEventPayload('acct_new_current', $tenant->id, [
+        'charges_enabled' => true,
+        'details_submitted' => true,
+    ]);
+
+    postRawSignedWebhook($currentPayload)->assertOk()->assertJson(['status' => 'accepted']);
+
+    expect(Tenant::query()->find($tenant->id)->stripe_onboarding_status)->toBe('complete');
 });
 
 test('D-0058: account.application.deauthorized for an unknown Connect account id is recorded but resolves to no tenant', function () {

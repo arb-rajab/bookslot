@@ -214,9 +214,15 @@ migration, a route, or a stub controller behind it.
       page (real navigation, never rendered as an in-app result, since a
       redirect back doesn't itself prove onboarding finished — the page
       re-checks live status on return rather than trusting the query
-      string). No account-replacement flow after a deauthorized Connect
-      account exists either — a separately-scoped, undesigned feature,
-      unchanged by this session.
+      string). **Account-replacement after a deauthorized Connect account
+      built Session 38 (D-0065):** `account.application.deauthorized` now
+      clears `stripe_connect_account_id` and marks the tenant `deauthorized`
+      (a status distinct from `restricted`) instead of leaving the stale,
+      now-inaccessible account id in place — the existing onboarding-link
+      endpoint's own "create an account if missing" branch then naturally
+      provisions a fresh one on the owner's next click, with the settings
+      page showing a distinct "reconnect" message and button label for this
+      state rather than reusing the "restricted" messaging.
 
 ### Permanently unverifiable by deliberate project-scope choice
 

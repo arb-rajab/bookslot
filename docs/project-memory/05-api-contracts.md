@@ -593,7 +593,12 @@ fresh, single-use Account Link — the same one call serves the "start,"
 "resume," and Stripe's own "refresh_url redirected me back here" cases, per
 D-0058. Safe to call again for an already-`complete` tenant (Stripe's
 hosted flow also serves updating previously-submitted details); does not
-recreate the account or touch its recorded status in that case.
+recreate the account or touch its recorded status in that case. **D-0065:**
+this is also, unchanged, the same call a `deauthorized` tenant makes to
+reconnect — `account.application.deauthorized`'s webhook handler now clears
+`stripe_connect_account_id` back to null, so this endpoint's existing
+"create one if missing" branch naturally provisions a brand new account;
+no separate reconnect endpoint exists or is needed.
 
 **`POST .../onboarding-link` response `200`:** `{ "url": "https://connect.stripe.com/...", "expires_at": 1234567890 }` —
 `url` is the Stripe-hosted onboarding page to redirect the owner to;
@@ -607,13 +612,21 @@ yet) — deliberately not just an echo of the last-known
 `tenants.stripe_onboarding_status`, since Stripe's own integration
 guidance is that a redirect back to `return_url` does not itself prove
 onboarding finished. Self-heals `tenants.stripe_onboarding_status` from
-the live result.
+the live result. **D-0065:** the "no account exists yet" short-circuit
+reports `deauthorized` instead of `not_started` when the tenant's last
+recorded status was `deauthorized` — preserving, for the owner-admin UI,
+the fact that this tenant previously had a working connection that was cut
+off, rather than showing the same first-time "not started" message a
+tenant that never connected anything would see.
 
-**`GET .../status` response `200`:** `{ "status": "not_started" | "pending" | "complete" | "restricted", "charges_enabled": bool, "details_submitted": bool }`.
+**`GET .../status` response `200`:** `{ "status": "not_started" | "pending" | "complete" | "restricted" | "deauthorized", "charges_enabled": bool, "details_submitted": bool }`.
 `status` is classified: a Stripe-reported `requirements.disabled_reason`
 always wins as `restricted` (even if `charges_enabled` is still `true` —
 Stripe can flag an account mid-review without immediately disabling
 charges); else `charges_enabled` → `complete`; else → `pending`.
+`deauthorized` is never produced by this live classification (it has no
+account left to classify) — it only ever comes from the persisted
+`tenants.stripe_onboarding_status` via the short-circuit above.
 
 **Errors (both endpoints):** `502` (`PAYMENT_PROVIDER_UNAVAILABLE`) if the
 Stripe call itself throws — a genuine provider failure, same convention as
@@ -728,7 +741,7 @@ as export); `409 ACTIVE_BOOKING_EXISTS` per the eligibility rule above.
 | `charge.refunded` | `refunds.status → succeeded`; `payments.status → refunded`/`partially_refunded` |
 | `charge.dispute.created` / `charge.dispute.closed` | `booking_events` audit entry (dispute evidence per 06); does not itself mutate appointment/payment status — a dispute is tracked, not auto-resolved |
 | `account.updated` (Connect) | `tenants.stripe_onboarding_status` — **built Session 28, D-0058**; classified via `ConnectAccountStatus::toOnboardingStatus()`, the same method endpoint 10's live status check uses |
-| `account.application.deauthorized` (Connect) | `tenants.stripe_onboarding_status → restricted` — **built Session 28, D-0058**; resolved via `tenants.stripe_connect_account_id`, not `metadata.tenant_id` (this event's `data.object` is a Stripe Application, which carries no tenant metadata) |
+| `account.application.deauthorized` (Connect) | `tenants.stripe_onboarding_status → deauthorized`, `stripe_connect_account_id → null` — **built Session 28 (D-0058) as `restricted`, revised Session 38 (D-0065) to a distinct `deauthorized` value with the account id cleared** so the existing onboarding-link endpoint naturally provisions a fresh account on reconnection; resolved via `tenants.stripe_connect_account_id`, not `metadata.tenant_id` (this event's `data.object` is a Stripe Application, which carries no tenant metadata) |
 
 Every webhook handler: (1) verifies `Stripe-Signature`, (2) inserts into
 `stripe_webhook_events` with `ON CONFLICT (stripe_event_id) DO NOTHING` and

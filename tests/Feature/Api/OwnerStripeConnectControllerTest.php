@@ -264,3 +264,66 @@ test('the status endpoint only ever reflects the calling owner\'s own tenant', f
     // by this request.
     expect(Tenant::query()->find($otherTenant->id)->stripe_onboarding_status)->toBe('restricted');
 });
+
+test('D-0065: the status endpoint reports deauthorized (not not_started) for a tenant whose account was disconnected, distinguishing it from a tenant that never onboarded', function () {
+    $tenant = ownerAndTenantForConnect();
+    $tenant->stripe_connect_account_id = null;
+    $tenant->stripe_onboarding_status = 'deauthorized';
+    $tenant->save();
+
+    $gateway = new FakeConnectOnboardingGateway;
+    app()->bind(ConnectOnboardingGateway::class, fn () => $gateway);
+
+    $xsrf = loginAsOwnerForConnect($tenant);
+
+    $response = getJson('/api/owner/stripe/connect/status', [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+
+    $response->assertOk();
+    $response->assertJson(['status' => 'deauthorized', 'charges_enabled' => false, 'details_submitted' => false]);
+    expect($gateway->retrieveAccountStatusCallCount())->toBe(0);
+});
+
+test('D-0065: a deauthorized tenant reconnects a brand new Connect account through the same onboarding-link endpoint — full deauthorization-to-reconnection regression', function () {
+    $tenant = ownerAndTenantForConnect();
+
+    // Simulate the state ProcessStripeWebhookJob::handleAccountDeauthorized()
+    // leaves behind after a real account.application.deauthorized webhook —
+    // that mutation itself is covered directly by
+    // StripeWebhookControllerTest's own D-0065 test; this test's job is to
+    // prove the *onboarding-link/status controller* correctly turns that
+    // state into a real, working reconnection with no manual intervention.
+    $tenant->stripe_connect_account_id = null;
+    $tenant->stripe_onboarding_status = 'deauthorized';
+    $tenant->save();
+
+    $gateway = new FakeConnectOnboardingGateway(accountId: 'acct_reconnected_fresh');
+    app()->bind(ConnectOnboardingGateway::class, fn () => $gateway);
+
+    $xsrf = loginAsOwnerForConnect($tenant);
+
+    $statusBefore = getJson('/api/owner/stripe/connect/status', [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+    $statusBefore->assertOk();
+    $statusBefore->assertJson(['status' => 'deauthorized']);
+
+    $linkResponse = postJson('/api/owner/stripe/connect/onboarding-link', [], [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+
+    $linkResponse->assertOk();
+    $linkResponse->assertJsonStructure(['url', 'expires_at']);
+    expect($gateway->createAccountCallCount())->toBe(1);
+
+    $reconnected = Tenant::query()->find($tenant->id);
+    expect($reconnected->stripe_connect_account_id)->toBe('acct_reconnected_fresh');
+    expect($reconnected->stripe_onboarding_status)->toBe('pending');
+
+    $statusAfter = getJson('/api/owner/stripe/connect/status', [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+    $statusAfter->assertOk();
+    $statusAfter->assertJson(['status' => 'pending']);
+});
