@@ -309,7 +309,9 @@ class AppointmentController extends Controller
                 ->where('type', 'deposit')
                 ->first();
 
-            return ['appointment' => $appointment, 'payment' => $payment];
+            $tenant = Tenant::query()->find($appointment->tenant_id);
+
+            return ['appointment' => $appointment, 'payment' => $payment, 'tenant' => $tenant];
         });
 
         if ($lookup === null) {
@@ -320,6 +322,21 @@ class AppointmentController extends Controller
 
         if ($payment === null || $payment->status !== 'succeeded') {
             return response()->json(['error' => 'PAYMENT_NOT_REFUNDABLE'], 409);
+        }
+
+        // D-0066: `stripe_connect_account_id` is null both for a tenant
+        // that never completed Connect onboarding and for one mid-gap
+        // between D-0065's deauthorization webhook and reconnection — in
+        // both cases there is no tenant Stripe account to route this
+        // refund's transfer reversal through. Refusing outright here (before
+        // any Stripe call) is deliberately simpler than trying to make the
+        // Stripe call itself fail: StripePaymentIntentGateway::refund()
+        // refunds an already-created PaymentIntent by id alone and has no
+        // connected-account parameter to omit in the first place, so the
+        // routing risk lives entirely in this business-rule gate, not in
+        // the gateway call's own params.
+        if ($lookup['tenant'] === null || $lookup['tenant']->stripe_connect_account_id === null) {
+            return response()->json(['error' => 'STRIPE_ACCOUNT_NOT_CONNECTED'], 409);
         }
 
         $refundableBalance = $payment->amount;
@@ -481,6 +498,16 @@ class AppointmentController extends Controller
 
         if ($mandate === null || $mandate->stripe_payment_method_id === null) {
             return response()->json(['error' => 'PAYMENT_METHOD_NOT_AVAILABLE'], 409);
+        }
+
+        // D-0066: same gate as refund() above — a null connected-account id
+        // (never onboarded, or deauthorized per D-0065 and not yet
+        // reconnected) previously fell through to chargeOffSession()'s own
+        // "omit transfer_data/application_fee_amount" branch, which charges
+        // the customer's card through the PLATFORM's own Stripe account
+        // instead of failing. Block it here, before any Stripe call.
+        if ($tenant === null || $tenant->stripe_connect_account_id === null) {
+            return response()->json(['error' => 'STRIPE_ACCOUNT_NOT_CONNECTED'], 409);
         }
 
         $balanceAmount = $mandate->balance_amount_disclosed;
