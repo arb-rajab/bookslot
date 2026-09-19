@@ -6,6 +6,7 @@ use App\Models\Refund;
 use App\Models\Tenant;
 use App\Tenancy\SignedTenantToken;
 use App\Tenancy\TenantContext;
+use Illuminate\Support\Carbon;
 use Tests\Support\BookingFixture;
 
 use function Pest\Laravel\getJson;
@@ -114,7 +115,10 @@ test('D-0064: a legacy token minted with no expiry (the pre-D-0064 shape) still 
 
     $legacyToken = SignedTenantToken::issue('manage_booking', $tenant->id, $appointment->id);
 
-    $this->travelTo(now()->addYears(5));
+    // Carbon::setTestNow() rather than $this->travelTo() — see
+    // BookingControllerTest.php's own D-0064 test for why (a Larastan/Pest
+    // static-analysis stub gap, not a runtime issue).
+    Carbon::setTestNow(now()->addYears(5));
 
     getJson("/api/bookings/manage/{$legacyToken}")->assertOk();
 });
