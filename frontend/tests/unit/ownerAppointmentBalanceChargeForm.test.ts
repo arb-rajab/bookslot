@@ -103,6 +103,25 @@ describe('owner/appointments/[id].vue — balance charge', () => {
     expect(wrapper.find('.balance-card .error').exists()).toBe(false)
   })
 
+  it('surfaces STRIPE_ACCOUNT_NOT_CONNECTED (D-0066) with a clear, actionable message pointing at Settings → Stripe, not a generic error', async () => {
+    routes['/api/owner/appointments/undefined/balance/charge'] = () => ({
+      status: 409,
+      body: { error: 'STRIPE_ACCOUNT_NOT_CONNECTED' },
+    })
+
+    const wrapper = await mountSuspended(OwnerAppointmentDetailPage)
+    await flushUntil(() => wrapper.find('.balance-card').exists())
+
+    await wrapper.find('.balance-card button').trigger('click')
+    await wrapper.find('.balance-card .modal-actions button:not(.secondary)').trigger('click')
+    await flushUntil(() => wrapper.find('.balance-card .error').exists())
+
+    expect(wrapper.text()).not.toContain('Something went wrong')
+    expect(wrapper.text()).toContain('Settings')
+    expect(wrapper.text()).toContain('Stripe')
+    expect(wrapper.find('.balance-card .warning').exists()).toBe(false)
+  })
+
   it('surfaces a genuine provider failure (502) as an error, never conflated with a decline', async () => {
     routes['/api/owner/appointments/undefined/balance/charge'] = () => ({
       status: 502,

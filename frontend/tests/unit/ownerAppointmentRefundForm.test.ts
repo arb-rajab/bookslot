@@ -123,6 +123,24 @@ describe('owner/appointments/[id].vue — refund', () => {
     expect(wrapper.text()).toContain('not in a refundable state')
   })
 
+  it('surfaces STRIPE_ACCOUNT_NOT_CONNECTED (D-0066) with a clear, actionable message pointing at Settings → Stripe, not a generic error', async () => {
+    routes['/api/owner/appointments/undefined/refund'] = () => ({
+      status: 409,
+      body: { error: 'STRIPE_ACCOUNT_NOT_CONNECTED' },
+    })
+
+    const wrapper = await mountSuspended(OwnerAppointmentDetailPage)
+    await flushUntil(() => wrapper.find('.refund-card').exists())
+
+    await wrapper.find('.refund-card button.danger').trigger('click')
+    await wrapper.find('.refund-card .modal-actions button.danger').trigger('click')
+    await flushUntil(() => wrapper.find('.refund-card .error').exists())
+
+    expect(wrapper.text()).not.toContain('Something went wrong')
+    expect(wrapper.text()).toContain('Settings')
+    expect(wrapper.text()).toContain('Stripe')
+  })
+
   it('renders the amount field\'s own 422 message inline, next to the field', async () => {
     routes['/api/owner/appointments/undefined/refund'] = () => ({
       status: 422,

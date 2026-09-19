@@ -409,8 +409,13 @@ covers both a payment that was never captured (no deposit row, or one
 still `requires_action`/`failed`) and one that has already been refunded
 (fully or partially: `04`'s payment state machine draws both `refunded`
 and `partially_refunded` as terminal, so a refund is one-shot per payment,
-never incrementally topped up across multiple calls); `422`
-(`VALIDATION_FAILED`) if `amount` exceeds the payment's own amount; `502`
+never incrementally topped up across multiple calls); `409`
+(`STRIPE_ACCOUNT_NOT_CONNECTED`, D-0066) if the tenant's
+`stripe_connect_account_id` is currently null — never onboarded, or
+deauthorized (D-0065) and not yet reconnected — checked and rejected
+*before* any Stripe call is attempted, never allowed to silently route
+through the platform's own Stripe account; `422` (`VALIDATION_FAILED`) if
+`amount` exceeds the payment's own amount; `502`
 (`PAYMENT_PROVIDER_UNAVAILABLE`) if the Stripe call itself throws.
 
 Owner-initiated only (FR-12/J7/J8) — never system-triggered by
@@ -464,10 +469,12 @@ already exists with status `succeeded`, `paid_manually`, or `processing`
 treats a decline as retriable, not terminal); `409`
 (`PAYMENT_METHOD_NOT_AVAILABLE`) if `payment_mandates.
 stripe_payment_method_id` is still null (D-0031's backfill never ran for
-this booking — R-07); `409` (`NO_BALANCE_DUE`) if the disclosed balance is
-zero or less; `502` (`PAYMENT_PROVIDER_UNAVAILABLE`) if the Stripe call
-itself throws (a genuine provider failure, distinct from an ordinary
-decline — see D-0057).
+this booking — R-07); `409` (`STRIPE_ACCOUNT_NOT_CONNECTED`, D-0066) if the
+tenant's `stripe_connect_account_id` is currently null — same check and
+same reasoning as endpoint 5's identical error, checked before any Stripe
+call; `409` (`NO_BALANCE_DUE`) if the disclosed balance is zero or less;
+`502` (`PAYMENT_PROVIDER_UNAVAILABLE`) if the Stripe call itself throws (a
+genuine provider failure, distinct from an ordinary decline — see D-0057).
 
 Owner-initiated only, via this dedicated action route — J5's "if the
 studio's policy is auto-charge" describes a studio-configurable trigger

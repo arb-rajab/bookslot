@@ -40,7 +40,16 @@ beforeEach(function () {
  */
 function ownerAndTenant(): array
 {
-    $tenant = Tenant::factory()->create();
+    // D-0066: a normal, fully-connected tenant — most tests in this file
+    // exercise refund()/chargeBalance(), both of which now (D-0066) reject
+    // a tenant with no connected Stripe account outright. Tests that
+    // specifically want the deauthorized/never-onboarded gap use their own
+    // Tenant::factory()->create(['stripe_connect_account_id' => null, ...])
+    // instead of this helper.
+    $tenant = Tenant::factory()->create([
+        'stripe_connect_account_id' => 'acct_fake_connected',
+        'stripe_onboarding_status' => 'complete',
+    ]);
 
     TenantContext::run($tenant->id, function () use ($tenant) {
         User::factory()->create([
@@ -599,6 +608,106 @@ test('a refund is still allowed on a confirmed (not cancelled) appointment — J
     });
 });
 
+// D-0066: refunding/balance-charging a tenant with no connected Stripe
+// account (never onboarded, or deauthorized per D-0065 and not yet
+// reconnected — both states share `stripe_connect_account_id === null`)
+// must fail cleanly rather than silently routing the Stripe call to the
+// PLATFORM's own account — see D-0066 for why this was a real
+// financial-correctness gap, not a UX nicety.
+test('a refund attempt against a tenant with no connected Stripe account is rejected as 409 STRIPE_ACCOUNT_NOT_CONNECTED, never reaching Stripe', function () {
+    $tenant = Tenant::factory()->create([
+        'stripe_connect_account_id' => null,
+        'stripe_onboarding_status' => 'deauthorized',
+    ]);
+    TenantContext::run($tenant->id, function () use ($tenant) {
+        User::factory()->create([
+            'tenant_id' => $tenant->id,
+            'role' => 'owner',
+            'email' => 'owner@example.test',
+            'password_hash' => Hash::make('correct-password'),
+        ]);
+    });
+    $appointment = BookingFixture::appointmentFor($tenant, ['status' => 'confirmed']);
+    BookingFixture::depositPaymentFor($tenant, $appointment, ['status' => 'succeeded', 'amount' => 5000]);
+
+    $gateway = new FakePaymentIntentGateway;
+    app()->bind(PaymentIntentGateway::class, fn () => $gateway);
+
+    $xsrf = loginAsOwner($tenant);
+
+    $response = postJson("/api/owner/appointments/{$appointment->id}/refund", [], [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+
+    $response->assertStatus(409);
+    $response->assertJson(['error' => 'STRIPE_ACCOUNT_NOT_CONNECTED']);
+    expect($gateway->refundCallCount())->toBe(0);
+
+    TenantContext::run($tenant->id, function () use ($appointment) {
+        // No refunds row created, deposit payment untouched — the request
+        // never got far enough to mutate anything.
+        $payment = Payment::query()->where('appointment_id', $appointment->id)->where('type', 'deposit')->first();
+        expect($payment->status)->toBe('succeeded');
+        expect(Refund::query()->where('payment_id', $payment->id)->count())->toBe(0);
+    });
+});
+
+test('a refund attempt against a tenant that has never completed Stripe Connect onboarding is rejected the same way — not just the deauthorized case', function () {
+    $tenant = Tenant::factory()->create([
+        'stripe_connect_account_id' => null,
+        'stripe_onboarding_status' => 'not_started',
+    ]);
+    TenantContext::run($tenant->id, function () use ($tenant) {
+        User::factory()->create([
+            'tenant_id' => $tenant->id,
+            'role' => 'owner',
+            'email' => 'owner@example.test',
+            'password_hash' => Hash::make('correct-password'),
+        ]);
+    });
+    $appointment = BookingFixture::appointmentFor($tenant, ['status' => 'confirmed']);
+    BookingFixture::depositPaymentFor($tenant, $appointment, ['status' => 'succeeded', 'amount' => 5000]);
+
+    $gateway = new FakePaymentIntentGateway;
+    app()->bind(PaymentIntentGateway::class, fn () => $gateway);
+
+    $xsrf = loginAsOwner($tenant);
+
+    $response = postJson("/api/owner/appointments/{$appointment->id}/refund", [], [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+
+    $response->assertStatus(409);
+    $response->assertJson(['error' => 'STRIPE_ACCOUNT_NOT_CONNECTED']);
+    expect($gateway->refundCallCount())->toBe(0);
+});
+
+test('a refund against a tenant with a merely restricted (still connected) Stripe account is NOT blocked by the account-routing check', function () {
+    $tenant = Tenant::factory()->create([
+        'stripe_connect_account_id' => 'acct_fake_restricted',
+        'stripe_onboarding_status' => 'restricted',
+    ]);
+    TenantContext::run($tenant->id, function () use ($tenant) {
+        User::factory()->create([
+            'tenant_id' => $tenant->id,
+            'role' => 'owner',
+            'email' => 'owner@example.test',
+            'password_hash' => Hash::make('correct-password'),
+        ]);
+    });
+    $appointment = BookingFixture::appointmentFor($tenant, ['status' => 'confirmed']);
+    BookingFixture::depositPaymentFor($tenant, $appointment, ['status' => 'succeeded', 'amount' => 5000]);
+
+    $xsrf = loginAsOwner($tenant);
+
+    $response = postJson("/api/owner/appointments/{$appointment->id}/refund", [], [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+
+    $response->assertOk();
+    $response->assertJson(['payment_status' => 'refunded']);
+});
+
 // D-0057: POST /api/owner/appointments/{id}/balance/charge (05-api-
 // contracts.md endpoint 6, J5). Same discipline as the refund suite above
 // — FakePaymentIntentGateway is bound file-wide (see this file's top
@@ -958,6 +1067,118 @@ test('a staff member cannot call the owner balance-charge endpoint', function ()
 
 test('an unauthenticated request to the balance-charge endpoint is rejected', function () {
     postJson('/api/owner/appointments/some-id/balance/charge')->assertStatus(401);
+});
+
+// D-0066: same gap, same fix, on the balance-charge endpoint — see the
+// refund-suite tests above for the full reasoning.
+test('a balance-charge attempt against a tenant with no connected Stripe account is rejected as 409 STRIPE_ACCOUNT_NOT_CONNECTED, never reaching Stripe', function () {
+    $tenant = Tenant::factory()->create([
+        'stripe_connect_account_id' => null,
+        'stripe_onboarding_status' => 'deauthorized',
+    ]);
+    TenantContext::run($tenant->id, function () use ($tenant) {
+        User::factory()->create([
+            'tenant_id' => $tenant->id,
+            'role' => 'owner',
+            'email' => 'owner@example.test',
+            'password_hash' => Hash::make('correct-password'),
+        ]);
+    });
+    $appointment = BookingFixture::appointmentFor($tenant, ['status' => 'completed']);
+    BookingFixture::depositPaymentFor(
+        $tenant,
+        $appointment,
+        ['status' => 'succeeded', 'amount' => 2000],
+        ['balance_amount_disclosed' => 8000, 'stripe_payment_method_id' => 'pm_fake_saved_card'],
+    );
+
+    $gateway = new FakePaymentIntentGateway;
+    app()->bind(PaymentIntentGateway::class, fn () => $gateway);
+
+    $xsrf = loginAsOwner($tenant);
+
+    $response = postJson("/api/owner/appointments/{$appointment->id}/balance/charge", [], [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+
+    $response->assertStatus(409);
+    $response->assertJson(['error' => 'STRIPE_ACCOUNT_NOT_CONNECTED']);
+    expect($gateway->chargeOffSessionCallCount())->toBe(0);
+
+    TenantContext::run($tenant->id, function () use ($appointment) {
+        expect(Payment::query()->where('appointment_id', $appointment->id)->where('type', 'balance')->count())->toBe(0);
+    });
+});
+
+test('a balance-charge attempt against a tenant that has never completed Stripe Connect onboarding is rejected the same way', function () {
+    $tenant = Tenant::factory()->create([
+        'stripe_connect_account_id' => null,
+        'stripe_onboarding_status' => 'not_started',
+    ]);
+    TenantContext::run($tenant->id, function () use ($tenant) {
+        User::factory()->create([
+            'tenant_id' => $tenant->id,
+            'role' => 'owner',
+            'email' => 'owner@example.test',
+            'password_hash' => Hash::make('correct-password'),
+        ]);
+    });
+    $appointment = BookingFixture::appointmentFor($tenant, ['status' => 'completed']);
+    BookingFixture::depositPaymentFor(
+        $tenant,
+        $appointment,
+        ['status' => 'succeeded', 'amount' => 2000],
+        ['balance_amount_disclosed' => 8000, 'stripe_payment_method_id' => 'pm_fake_saved_card'],
+    );
+
+    $gateway = new FakePaymentIntentGateway;
+    app()->bind(PaymentIntentGateway::class, fn () => $gateway);
+
+    $xsrf = loginAsOwner($tenant);
+
+    $response = postJson("/api/owner/appointments/{$appointment->id}/balance/charge", [], [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+
+    $response->assertStatus(409);
+    $response->assertJson(['error' => 'STRIPE_ACCOUNT_NOT_CONNECTED']);
+    expect($gateway->chargeOffSessionCallCount())->toBe(0);
+});
+
+test('a balance charge against a tenant with a merely restricted (still connected) Stripe account is NOT blocked by the account-routing check', function () {
+    $tenant = Tenant::factory()->create([
+        'stripe_connect_account_id' => 'acct_fake_restricted',
+        'stripe_onboarding_status' => 'restricted',
+    ]);
+    TenantContext::run($tenant->id, function () use ($tenant) {
+        User::factory()->create([
+            'tenant_id' => $tenant->id,
+            'role' => 'owner',
+            'email' => 'owner@example.test',
+            'password_hash' => Hash::make('correct-password'),
+        ]);
+    });
+    $appointment = BookingFixture::appointmentFor($tenant, ['status' => 'completed']);
+    BookingFixture::depositPaymentFor(
+        $tenant,
+        $appointment,
+        ['status' => 'succeeded', 'amount' => 2000],
+        ['balance_amount_disclosed' => 8000, 'stripe_payment_method_id' => 'pm_fake_saved_card'],
+    );
+
+    app()->bind(PaymentIntentGateway::class, fn () => new FakePaymentIntentGateway(
+        chargeOffSessionStatus: 'succeeded',
+        chargeOffSessionPaymentIntentId: 'pi_fake_balance_restricted',
+    ));
+
+    $xsrf = loginAsOwner($tenant);
+
+    $response = postJson("/api/owner/appointments/{$appointment->id}/balance/charge", [], [
+        'Origin' => 'http://localhost', 'X-XSRF-TOKEN' => $xsrf,
+    ]);
+
+    $response->assertOk();
+    $response->assertJson(['status' => 'succeeded']);
 });
 
 test('a cancelled appointment\'s slot can be rebooked — the exclusion constraint\'s partial WHERE excludes cancelled', function () {

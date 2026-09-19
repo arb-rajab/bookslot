@@ -167,6 +167,7 @@ function describeError(code: string): string {
     BALANCE_ALREADY_SETTLED: 'The balance for this appointment has already been settled.',
     PAYMENT_METHOD_NOT_AVAILABLE: 'No saved payment method is available for an off-session charge on this booking.',
     NO_BALANCE_DUE: 'There is no remaining balance to charge for this appointment.',
+    STRIPE_ACCOUNT_NOT_CONNECTED: 'This studio has no connected Stripe account right now (never connected, or disconnected and not yet reconnected) — go to Settings → Stripe to (re)connect before trying this again.',
     PAYMENT_PROVIDER_UNAVAILABLE: 'Stripe is temporarily unavailable. Please try again shortly.',
     NETWORK_ERROR: 'Could not reach the booking server. Is the API running?',
   }
