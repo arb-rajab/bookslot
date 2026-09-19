@@ -20,6 +20,7 @@ use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 use Throwable;
 
 /**
@@ -183,6 +184,17 @@ class BookingController extends Controller
             ->addMinutes(config('booking.hold_window_minutes'))
             ->addMinutes(config('booking.confirm_payment_token_grace_minutes'));
 
+        // D-0064: anchored to the appointment's own end time, not
+        // booking-creation time (contrast $holdExpiresAt above) — see
+        // config/booking.php's own docblock for why. Recomputed here
+        // rather than read back off $appointment->ends_at (a Postgres
+        // STORED generated column the in-memory model from create() above
+        // was never refreshed to pick up) from the exact same
+        // starts_at + duration_minutes formula the insert itself used.
+        $manageTokenExpiresAt = Carbon::parse($validated['starts_at'])
+            ->addMinutes($service->duration_minutes)
+            ->addDays(config('booking.manage_booking_token_expiry_grace_days'));
+
         return response()->json([
             'appointment_id' => $appointment->id,
             'status' => 'pending_payment',
@@ -191,7 +203,7 @@ class BookingController extends Controller
                 'currency' => $service->currency,
                 'client_secret' => $paymentIntent->clientSecret,
             ],
-            'manage_token' => SignedTenantToken::issue('manage_booking', $tenantId, $appointment->id),
+            'manage_token' => SignedTenantToken::issue('manage_booking', $tenantId, $appointment->id, $manageTokenExpiresAt),
             'payment_confirmation_token' => SignedTenantToken::issue('confirm_payment', $tenantId, $appointment->id, $holdExpiresAt),
         ], 201);
     }

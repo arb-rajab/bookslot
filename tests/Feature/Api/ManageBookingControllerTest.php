@@ -97,6 +97,29 @@ test('an expired token is rejected the same way, independent of the appointment\
 });
 
 /**
+ * D-0064 (09-decision-log.md): before this decision, every manage_booking
+ * token — including every one already sent to a real customer — was
+ * minted with expires_at = null. SignedTenantToken is stateless (D-0021:
+ * no storage, no revocation), so a token's expiry claim is baked into its
+ * own ciphertext at issuance and can never be retroactively changed —
+ * BookingController now issues a bounded expiry for every NEW booking, but
+ * an already-issued null-expiry token must keep working exactly as before,
+ * indefinitely, not be silently broken by this change. Explicit regression
+ * coverage for that backward-compatibility guarantee, travelling years
+ * into the future to prove there is genuinely no hidden cutoff.
+ */
+test('D-0064: a legacy token minted with no expiry (the pre-D-0064 shape) still never expires', function () {
+    $tenant = Tenant::factory()->create();
+    $appointment = BookingFixture::appointmentFor($tenant);
+
+    $legacyToken = SignedTenantToken::issue('manage_booking', $tenant->id, $appointment->id);
+
+    $this->travelTo(now()->addYears(5));
+
+    getJson("/api/bookings/manage/{$legacyToken}")->assertOk();
+});
+
+/**
  * D-0052: the customer-facing counterpart of
  * OwnerAppointmentControllerTest's cancel coverage — same bookkeeping-only
  * discipline, same reused manage_booking token as the show() tests above,

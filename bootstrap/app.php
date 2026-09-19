@@ -11,6 +11,7 @@ use Illuminate\Auth\AuthenticationException;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
+use Illuminate\Http\Exceptions\ThrottleRequestsException;
 use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
 use Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful;
@@ -152,6 +153,19 @@ return Application::configure(basePath: dirname(__DIR__))
         $exceptions->render(function (AuthenticationException $e, Request $request) {
             if ($request->is('api/*') || $request->expectsJson()) {
                 return response()->json(['error' => 'UNAUTHENTICATED'], 401);
+            }
+        });
+
+        // D-0063 (09-decision-log.md), Session 37: the `throttle:login`/
+        // `throttle:booking` middleware (routes/api.php) throws this on a
+        // limit breach — same convention as every other hand-mapped
+        // exception above, not Laravel's default {"message": "Too Many
+        // Attempts."}. $e->getHeaders() carries the Retry-After header
+        // ThrottleRequestsException already computes, so a well-behaved
+        // client still knows exactly when to retry.
+        $exceptions->render(function (ThrottleRequestsException $e, Request $request) {
+            if ($request->is('api/*') || $request->expectsJson()) {
+                return response()->json(['error' => 'TOO_MANY_REQUESTS'], 429, $e->getHeaders());
             }
         });
     })->create();

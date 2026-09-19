@@ -42,7 +42,12 @@ Route::prefix('tenants/{slug}')
         Route::get('services', [ServiceController::class, 'index']);
         Route::get('services/{service}/mandate', [MandateController::class, 'show']);
         Route::get('availability', [AvailabilityController::class, 'index']);
-        Route::post('login', [AuthController::class, 'login']);
+        // D-0063: brute-force/credential-stuffing protection — see
+        // config/rate_limiting.php for the threshold reasoning. Applied
+        // per-route (not to the whole `tenants/{slug}` group above), since
+        // `services`/`mandate`/`availability` are plain reads with no
+        // credential-guessing surface.
+        Route::post('login', [AuthController::class, 'login'])->middleware('throttle:login');
     });
 
 // D-0027/D-0030: deliberately NOT under the group above — `tenant.context`
@@ -50,7 +55,13 @@ Route::prefix('tenants/{slug}')
 // route must not do (it calls Stripe mid-request). `resolve.tenant.slug`
 // alone puts tenant_id onto the request; BookingController opens its own
 // short, explicit TenantContext::run() calls around the Stripe call.
-Route::middleware(['resolve.tenant.slug'])
+//
+// D-0063: `throttle:booking` runs first, deliberately outside/before
+// tenant resolution — the {slug} route parameter is already bound by
+// Laravel's router before any route middleware runs, so the limiter
+// closure can read it directly (see config/rate_limiting.php), and a
+// throttled request never needs to pay for a tenant lookup at all.
+Route::middleware(['throttle:booking', 'resolve.tenant.slug'])
     ->post('tenants/{slug}/bookings', [BookingController::class, 'store']);
 
 Route::middleware(['resolve.tenant.token:manage_booking', 'tenant.context'])
@@ -82,7 +93,9 @@ Route::middleware(['resolve.tenant.token:confirm_payment'])
 // this request carries no session, no slug, no signed token.
 Route::post('webhooks/stripe', [StripeWebhookController::class, 'store']);
 
-Route::post('admin/login', [AuthController::class, 'adminLogin']);
+// D-0063: same `login` named limiter as the tenant-scoped login route
+// above — see config/rate_limiting.php.
+Route::post('admin/login', [AuthController::class, 'adminLogin'])->middleware('throttle:login');
 
 Route::middleware(['auth'])->post('logout', [AuthController::class, 'logout']);
 

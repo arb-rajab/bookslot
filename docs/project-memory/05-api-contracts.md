@@ -1,7 +1,13 @@
 # API / Event Contracts
 > Purpose: the interface others depend on.
 > Project: bookslot (PRIVATE track)
-> Last updated: 2026-08-26 (Session 2 — Requirements and Data Model; amended Session 5 — mandate acceptance field added, FR-16 scope resolved; amended Session 6 — reconciled against D-0009/D-0012/D-0014, webhook coverage for the off-session balance charge clarified; amended Session 7 — endpoint 3 redesigned around D-0021's booking-scoped token, closing the tenant-context gap Session 6 raised and didn't fix; amended Session 9 — three endpoints actually implemented for the first time, with two real gaps found and raised rather than invented; amended Session 10 — both Session 9 gaps closed: auth wired (D-0029), booking creation built for real (D-0030); amended Session 16 — endpoint 1 (availability) built for real (D-0039), first real frontend consumer, a real CSRF-on-public-endpoints finding recorded (D-0041); amended Session 17 — the owner appointment list/status endpoints built (D-0042), a serious pre-existing owner/staff re-authentication bug found and fixed (D-0043); amended Session 21 — endpoint 3b (`POST /api/bookings/manage/{token}/cancel`, customer-initiated cancellation) built, closing this row from "sketch, not built" to real (D-0052))
+> Last updated: 2026-08-26 (Session 2 — Requirements and Data Model; amended Session 5 — mandate acceptance field added, FR-16 scope resolved; amended Session 6 — reconciled against D-0009/D-0012/D-0014, webhook coverage for the off-session balance charge clarified; amended Session 7 — endpoint 3 redesigned around D-0021's booking-scoped token, closing the tenant-context gap Session 6 raised and didn't fix; amended Session 9 — three endpoints actually implemented for the first time, with two real gaps found and raised rather than invented; amended Session 10 — both Session 9 gaps closed: auth wired (D-0029), booking creation built for real (D-0030); amended Session 16 — endpoint 1 (availability) built for real (D-0039), first real frontend consumer, a real CSRF-on-public-endpoints finding recorded (D-0041); amended Session 17 — the owner appointment list/status endpoints built (D-0042), a serious pre-existing owner/staff re-authentication bug found and fixed (D-0043); amended Session 21 — endpoint 3b (`POST /api/bookings/manage/{token}/cancel`, customer-initiated cancellation) built, closing this row from "sketch, not built" to real (D-0052); amended Session 37 — rate limiting built for endpoint 2 and both login endpoints (D-0063), closing this file's own Deferred item named since Session 6; endpoint 2's `manage_token` now carries a real, bounded expiry anchored to the appointment's own end time instead of `null` (D-0064))
+
+## Amendment (Session 37, 2026-09-19) — rate limiting built (D-0063); `manage_booking` token expiry designed and built (D-0064)
+
+**Rate limiting**, this file's own Deferred item since Session 6, restated unaddressed after Session 10: `POST /api/tenants/{slug}/bookings`, `POST /api/tenants/{slug}/login`, and `POST /api/admin/login` are now behind Laravel's own named `RateLimiter`/`throttle:` middleware — a breach now returns `429 { "error": "TOO_MANY_REQUESTS" }` (a new global rendering rule alongside this file's existing `VALIDATION_FAILED`/`NOT_FOUND`/`UNAUTHENTICATED` ones, `Retry-After` header included) rather than succeeding unbounded. Thresholds and keying are documented in `config/rate_limiting.php` and D-0063 — not repeated here, since this file documents endpoint contracts, not operational tuning values that may change independently of the contract shape.
+
+**`manage_booking` token expiry (D-0052's named residual risk, closed):** endpoint 2's `201` response still returns `manage_token` in the same place with the same shape, but it is no longer permanently valid — it now expires `booking.manage_booking_token_expiry_grace_days` (3, by default) after the appointment's own end time. `GET .../manage/{token}` and endpoint 3b below (`POST .../manage/{token}/cancel`) both already used the same generic `404 { "error": "INVALID_OR_EXPIRED_TOKEN" }` for a bad/wrong-purpose token — an expired one now renders identically, no new error code. See D-0064 for the full anchor-choice reasoning and why already-issued (permanently non-expiring) tokens keep working unchanged.
 
 ## Amendment (Session 17, 2026-08-26) — owner dashboard endpoints built; a real, previously-undetected owner/staff auth bug found and fixed
 
@@ -246,7 +252,12 @@ minimization). `payment_confirmation_token` — **added Session 7, D-0021** —
 is a distinct, single-purpose signed token the client uses only to call
 endpoint 3 below; it is deliberately not the same value as `manage_token`
 (least privilege: a leaked manage-booking link must not also grant the
-ability to drive payment confirmation/retry).
+ability to drive payment confirmation/retry). `manage_token` — **as of
+Session 37, D-0064** — now carries a real, bounded expiry (the
+appointment's own `ends_at` plus `booking.manage_booking_token_expiry_grace_days`,
+3 by default) instead of never expiring; see endpoint 3b below for how an
+expired token behaves and D-0064 for why it's anchored to the appointment's
+end time rather than booking-creation time.
 
 **Errors:**
 - `409 { "error": "SLOT_ALREADY_BOOKED" }` — the exclusion constraint
@@ -267,6 +278,10 @@ ability to drive payment confirmation/retry).
   the hold is released immediately (appointment moved to `cancelled`,
   `cancelled_reason: "payment_provider_error"`) rather than left to expire
   naturally, so the customer can retry a fresh booking right away.
+- `429 { "error": "TOO_MANY_REQUESTS" }` — **added Session 37, D-0063.**
+  Rate-limited per (IP + tenant slug); a `Retry-After` header is included.
+  Counts against the same limit whether or not the request body is
+  well-formed — this middleware runs before validation.
 
 ### 3. `POST /api/bookings/{token}/confirm-payment` — redesigned Session 7, D-0021
 
@@ -323,8 +338,10 @@ returns (`GET .../manage/{token}` above uses the identical token) — **not**
 a new token purpose, per D-0052. Optional body: `{ "reason": "…" }`.
 
 **Mechanism:** identical token verification to `GET .../manage/{token}`
-(signature, `purpose = manage_booking`, expiry — D-0021), then the same
-tenant-context establishment from the token's own signed `tenant_id`. Only
+(signature, `purpose = manage_booking`, expiry — D-0021, a real bounded
+expiry as of Session 37's D-0064 rather than the permanently-null one every
+token minted before that session carries), then the same tenant-context
+establishment from the token's own signed `tenant_id`. Only
 `pending_payment`/`confirmed` appointments are cancellable (mirrors
 `Owner\AppointmentController::CANCELLABLE_STATUSES`, D-0051); a terminal
 status, including an already-`cancelled` one, is rejected rather than
@@ -738,11 +755,12 @@ that already succeeded.
 - Versioning/deprecation policy.
 - Pagination conventions for list endpoints (`GET /api/owner/appointments`
   above will need one before it's real).
-- Rate limiting, especially on the public booking endpoints (unauthenticated
-  by nature — abuse/spam-booking protection is a real concern FR-03's
-  hold-window design doesn't fully address on its own; still true after
-  Session 10 — no rate limiting was added to the new login endpoints or
-  booking creation either).
+- **Resolved, Session 37 (D-0063):** rate limiting on booking creation and
+  both login endpoints — see this file's own Session 37 amendment above.
+  Not extended to any other endpoint (availability, mandate display,
+  confirm-payment, manage-booking read/cancel, any owner/staff/admin
+  route) — an explicit, named scope boundary (D-0063), not an oversight;
+  revisit if a future session has a concrete reason to widen it.
 - **Resolved, Session 10 (D-0029):** auth token mechanics for owner/staff/
   admin — Sanctum SPA (stateful/cookie) mode, one shared `web` guard,
   role-based authorization at the app layer. Session/refresh/expiry follow

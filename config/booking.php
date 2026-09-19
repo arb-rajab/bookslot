@@ -36,6 +36,49 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Manage-booking token expiry grace period
+    |--------------------------------------------------------------------------
+    |
+    | D-0064 (09-decision-log.md), Session 37: `manage_booking` was minted
+    | with no expiry at all since D-0052 (Session 21) — a residual risk
+    | D-0052 named explicitly rather than silently. Unlike
+    | `confirm_payment_token_grace_minutes` above (anchored to
+    | booking-creation time, since that token's whole job is done within
+    | one short hold window), this token must stay valid for as long as the
+    | customer might reasonably need to view or cancel their own booking —
+    | which could be up to `availability_max_lookahead_days` (60) in the
+    | future at booking time. A fixed offset from *issuance* would either
+    | have to be at least that long (barely improving on "no expiry" for a
+    | near-term booking) or would silently invalidate a distant-future
+    | booking's own link before the appointment even happens. Anchored to
+    | the appointment's own `ends_at` instead — set once, at issuance,
+    | exactly like `confirm_payment`'s own anchor-plus-grace shape, just
+    | anchored to a different, appointment-relative event. 3 days after the
+    | appointment's end covers late self-service cancellation and
+    | post-appointment lookup (a receipt-like use) without leaving the link
+    | live indefinitely — a provisional, reasoned guess (same status as
+    | `hold_window_minutes`), not validated against real usage.
+    |
+    | No migration/backfill for already-issued tokens: `SignedTenantToken`
+    | is stateless by design (D-0021 — no storage, no revocation), so a
+    | token's own `expires_at` claim is baked into its ciphertext at
+    | issuance and can never be changed after the fact regardless of what
+    | this config value is set to later. Every `manage_booking` token
+    | issued before this change carries `expires_at: null` and keeps
+    | working exactly as it always has (SignedTenantToken::verify()'s
+    | expiry check is a no-op when `expires_at` is null) — this is not an
+    | oversight, it is the only technically honest way to avoid breaking
+    | already-sent links under this token design, and it means the
+    | population of never-expiring links shrinks to zero on its own as
+    | those older bookings' appointments complete, rather than needing an
+    | explicit forced-migration step.
+    |
+    */
+
+    'manage_booking_token_expiry_grace_days' => (int) env('BOOKING_MANAGE_TOKEN_EXPIRY_GRACE_DAYS', 3),
+
+    /*
+    |--------------------------------------------------------------------------
     | Payment-mandate backfill reconciliation grace period
     |--------------------------------------------------------------------------
     |
