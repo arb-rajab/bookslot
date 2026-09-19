@@ -215,17 +215,25 @@ class ProcessStripeWebhookJob extends TenantScopedJob
      * `tenants` is not RLS-scoped (04-data-model.md) — a plain `find()` by
      * this job's own already-resolved tenant_id is correct and sufficient.
      *
+     * D-0065: guards against a stale/out-of-order `account.updated` for an
+     * account the tenant is no longer actually linked to — the exact gap
+     * between a deauthorization (which clears `stripe_connect_account_id`)
+     * and a subsequent reconnection (which writes a brand new one) during
+     * which a late-arriving event for the *old* account could otherwise
+     * overwrite a status the tenant has already moved past, since this
+     * event's own tenant resolution is via the Account's own persisted
+     * `metadata.tenant_id` (StripeWebhookController), not via
+     * `stripe_connect_account_id` — metadata on a Stripe Account object
+     * survives disconnection, so the old account could still resolve to
+     * this same tenant. Compares the event's own `data.object.id` (the
+     * Account this event is actually about) against the tenant's current
+     * `stripe_connect_account_id` before applying anything.
+     *
      * @param  array<string, mixed>  $payload
      */
     private function handleAccountUpdated(array $payload): void
     {
         $object = $payload['data']['object'];
-
-        $status = new ConnectAccountStatus(
-            (bool) ($object['charges_enabled'] ?? false),
-            (bool) ($object['details_submitted'] ?? false),
-            $object['requirements']['disabled_reason'] ?? null,
-        );
 
         $tenant = Tenant::query()->find($this->tenantId);
 
@@ -235,22 +243,46 @@ class ProcessStripeWebhookJob extends TenantScopedJob
             return;
         }
 
+        if ($tenant->stripe_connect_account_id !== ($object['id'] ?? null)) {
+            Log::warning('account.updated webhook is about an account no longer linked to this tenant — skipped', [
+                'tenant_id' => $this->tenantId,
+                'event_account_id' => $object['id'] ?? null,
+                'tenant_account_id' => $tenant->stripe_connect_account_id,
+            ]);
+
+            return;
+        }
+
+        $status = new ConnectAccountStatus(
+            (bool) ($object['charges_enabled'] ?? false),
+            (bool) ($object['details_submitted'] ?? false),
+            $object['requirements']['disabled_reason'] ?? null,
+        );
+
         $tenant->stripe_onboarding_status = $status->toOnboardingStatus();
         $tenant->save();
     }
 
     /**
-     * D-0058: the platform's access to this tenant's connected account has
-     * been revoked (the owner disconnected it from their own Stripe
-     * dashboard, or Stripe itself revoked it) — the one Connect event this
-     * codebase treats as unconditionally `restricted`, regardless of
-     * whatever `charges_enabled`/`details_submitted` last said. Does not
-     * clear `stripe_connect_account_id`: that id remains a true historical
-     * record of which account was connected, and `onboardingLink()`
-     * re-issuing a link against a deauthorized account is Stripe's own
-     * problem to reject, not something this codebase needs to pre-empt by
-     * inventing account replacement here — a genuinely separate, unbuilt
-     * concern, out of this session's scope.
+     * D-0058/D-0065: the platform's access to this tenant's connected
+     * account has been revoked (the owner disconnected it from their own
+     * Stripe dashboard, or Stripe itself revoked it). Unlike D-0058's
+     * original design, this now clears `stripe_connect_account_id` back to
+     * null and marks the tenant `deauthorized` (a distinct value from
+     * `restricted` — see the CHECK-constraint migration and D-0065) rather
+     * than leaving the stale account id in place: `onboardingLink()`
+     * (Owner\StripeConnectController) only ever creates a new Connect
+     * account when that column is null, so leaving the old, now-inaccessible
+     * id in place would make every future onboarding-link/status call keep
+     * reusing it — a real Stripe account the platform can no longer create
+     * Account Links or read status against, surfacing as a permanent `502`
+     * that looks exactly like a transient Stripe outage and gives the owner
+     * no way to ever reconnect. Clearing it is what lets the existing
+     * onboarding-link flow naturally provision a fresh account next time the
+     * owner clicks it — no new endpoint needed. `deauthorized` (rather than
+     * reusing `not_started`) preserves, for the owner-admin UI, the fact
+     * that this tenant previously had a working connection that was cut
+     * off, distinct from a tenant that never connected one at all.
      */
     private function handleAccountDeauthorized(): void
     {
@@ -262,7 +294,8 @@ class ProcessStripeWebhookJob extends TenantScopedJob
             return;
         }
 
-        $tenant->stripe_onboarding_status = 'restricted';
+        $tenant->stripe_connect_account_id = null;
+        $tenant->stripe_onboarding_status = 'deauthorized';
         $tenant->save();
     }
 }

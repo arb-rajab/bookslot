@@ -124,7 +124,7 @@ export interface OnboardingLinkResponse {
 }
 
 export interface ConnectStatus {
-  status: 'not_started' | 'pending' | 'complete' | 'restricted'
+  status: 'not_started' | 'pending' | 'complete' | 'restricted' | 'deauthorized'
   charges_enabled: boolean
   details_submitted: boolean
 }

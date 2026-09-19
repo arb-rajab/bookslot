@@ -40,6 +40,7 @@ const actionLabel = computed(() => {
   if (!status.value) return 'Start onboarding'
   if (status.value.status === 'not_started') return 'Start onboarding with Stripe'
   if (status.value.status === 'complete') return 'Update details on Stripe'
+  if (status.value.status === 'deauthorized') return 'Connect a new Stripe account'
   return 'Continue onboarding with Stripe'
 })
 
@@ -76,6 +77,7 @@ const statusLabels: Record<ConnectStatus['status'], string> = {
   pending: 'Pending — Stripe still needs more information',
   complete: 'Complete — this studio can receive payouts',
   restricted: 'Restricted — Stripe has flagged this account',
+  deauthorized: 'Disconnected — this studio needs to connect a new Stripe account',
 }
 </script>
 
@@ -103,6 +105,12 @@ const statusLabels: Record<ConnectStatus['status'], string> = {
         <p v-if="status.status === 'restricted'" class="warning">
           Stripe has flagged this account and disabled charges. Follow the link below to see what Stripe
           needs before this studio can take payments again.
+        </p>
+        <p v-if="status.status === 'deauthorized'" class="warning">
+          This studio's previous Stripe connection was disconnected (either from Stripe's dashboard or by
+          Stripe itself) and can't be resumed. Connecting a new account below will not affect this
+          studio's past bookings or payment history — only new deposits and balance charges need a
+          working connection.
         </p>
 
         <p v-if="onboardingError" class="error">{{ onboardingError }}</p>
@@ -170,6 +178,11 @@ const statusLabels: Record<ConnectStatus['status'], string> = {
 }
 
 .status-restricted {
+  background: #fdecea;
+  color: #611a15;
+}
+
+.status-deauthorized {
   background: #fdecea;
   color: #611a15;
 }

@@ -108,8 +108,19 @@ class StripeConnectController extends Controller
         }
 
         if ($tenant->stripe_connect_account_id === null) {
+            // D-0065: a deauthorized tenant has no account to check Stripe
+            // against either (handleAccountDeauthorized() clears it), but
+            // reporting bare `not_started` here would erase the fact that
+            // this tenant previously had a working connection that was cut
+            // off — the owner-admin UI needs that distinction to show a
+            // "reconnect" message rather than a first-time "get started"
+            // one. Any other pre-account status collapses to `not_started`
+            // as before (there is no other reachable value here in
+            // practice, since `pending`/`complete`/`restricted` all require
+            // an account id to have been set at some point and nothing else
+            // clears it).
             return response()->json([
-                'status' => 'not_started',
+                'status' => $tenant->stripe_onboarding_status === 'deauthorized' ? 'deauthorized' : 'not_started',
                 'charges_enabled' => false,
                 'details_submitted' => false,
             ]);
