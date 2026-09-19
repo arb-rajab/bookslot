@@ -9,9 +9,11 @@ use App\Models\Tenant;
 use App\Payments\PaymentIntentGateway;
 use App\Tenancy\SignedTenantToken;
 use App\Tenancy\TenantContext;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 use Tests\Support\FakePaymentIntentGateway;
 
+use function Pest\Laravel\getJson;
 use function Pest\Laravel\postJson;
 
 beforeEach(function () {
@@ -94,6 +96,36 @@ test('booking creation succeeds end to end: pending_payment appointment, deposit
     $payload = SignedTenantToken::verify($response->json('payment_confirmation_token'), 'confirm_payment');
     expect($payload['appointment_id'])->toBe($appointmentId);
     expect($payload['tenant_id'])->toBe($tenant->id);
+});
+
+test('D-0064: the manage_token issued at booking creation expires N days after the appointment ends, not never', function () {
+    [$tenant, $service, $staff] = bookingTenant();
+
+    $response = postJson("/api/tenants/{$tenant->slug}/bookings", bookingRequestBody($service, $staff));
+    $response->assertCreated();
+
+    $manageToken = $response->json('manage_token');
+    $appointmentId = $response->json('appointment_id');
+
+    $graceDays = config('booking.manage_booking_token_expiry_grace_days');
+    $endsAt = TenantContext::run($tenant->id, fn () => Appointment::findOrFail($appointmentId)->ends_at);
+    $expectedExpiresAt = $endsAt->copy()->addDays($graceDays);
+
+    // Still valid the instant before its computed expiry. Carbon::setTestNow()
+    // rather than $this->travelTo() — Larastan's Pest stubs type $this
+    // inside a test() closure as Pest\PendingCalls\TestCall, which has no
+    // travelTo() method, even though it resolves fine at runtime (Pest
+    // binds the closure to the real TestCase). Both reset automatically
+    // after each test via InteractsWithTestCaseLifecycle's tearDown.
+    Carbon::setTestNow($expectedExpiresAt->copy()->subSecond());
+    getJson("/api/bookings/manage/{$manageToken}")->assertOk();
+
+    // Expired the instant it passes — same generic response as every other
+    // invalid-token case (D-0021's fail-closed shape), not a distinct code.
+    Carbon::setTestNow($expectedExpiresAt->copy()->addSecond());
+    getJson("/api/bookings/manage/{$manageToken}")
+        ->assertStatus(404)
+        ->assertJson(['error' => 'INVALID_OR_EXPIRED_TOKEN']);
 });
 
 test('booking creation with an unknown service_id returns 404', function () {

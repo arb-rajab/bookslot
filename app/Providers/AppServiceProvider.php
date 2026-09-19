@@ -9,8 +9,11 @@ use App\Payments\PaymentIntentGateway;
 use App\Payments\StripeConnectOnboardingGateway;
 use App\Payments\StripePaymentIntentGateway;
 use App\Queue\RabbitMq\RabbitMqConnector;
+use Illuminate\Cache\RateLimiting\Limit;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
 use Stripe\StripeClient;
 
@@ -61,5 +64,30 @@ class AppServiceProvider extends ServiceProvider
         // extend() call is what makes QUEUE_CONNECTION=rabbitmq resolvable
         // at all.
         Queue::extend('rabbitmq', fn () => new RabbitMqConnector);
+
+        // D-0063 (09-decision-log.md), Session 37: rate limiting, named as
+        // an unaddressed gap since Session 6/10 (05-api-contracts.md's
+        // Deferred section, D-0029's own entry) and never built until now.
+        // See config/rate_limiting.php for the threshold reasoning behind
+        // both limiters. Uses the default cache-backed RateLimiter store
+        // (CACHE_STORE — redis in every real environment, per .env.example)
+        // rather than any bespoke storage.
+        RateLimiter::for('login', function (Request $request) {
+            $credentialKey = mb_strtolower((string) $request->input('email')).'|'.$request->ip();
+
+            return [
+                Limit::perMinute(config('rate_limiting.login.per_credential_per_minute'))->by($credentialKey),
+                Limit::perMinute(config('rate_limiting.login.per_ip_per_minute'))->by((string) $request->ip()),
+            ];
+        });
+
+        RateLimiter::for('booking', function (Request $request) {
+            $tenantKey = (string) $request->ip().'|'.(string) $request->route('slug');
+
+            return [
+                Limit::perMinute(config('rate_limiting.booking.per_minute'))->by($tenantKey),
+                Limit::perHour(config('rate_limiting.booking.per_hour'))->by($tenantKey),
+            ];
+        });
     }
 }

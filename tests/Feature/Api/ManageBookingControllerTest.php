@@ -6,6 +6,7 @@ use App\Models\Refund;
 use App\Models\Tenant;
 use App\Tenancy\SignedTenantToken;
 use App\Tenancy\TenantContext;
+use Illuminate\Support\Carbon;
 use Tests\Support\BookingFixture;
 
 use function Pest\Laravel\getJson;
@@ -94,6 +95,32 @@ test('an expired token is rejected the same way, independent of the appointment\
 
     $response->assertStatus(404);
     $response->assertJson(['error' => 'INVALID_OR_EXPIRED_TOKEN']);
+});
+
+/**
+ * D-0064 (09-decision-log.md): before this decision, every manage_booking
+ * token — including every one already sent to a real customer — was
+ * minted with expires_at = null. SignedTenantToken is stateless (D-0021:
+ * no storage, no revocation), so a token's expiry claim is baked into its
+ * own ciphertext at issuance and can never be retroactively changed —
+ * BookingController now issues a bounded expiry for every NEW booking, but
+ * an already-issued null-expiry token must keep working exactly as before,
+ * indefinitely, not be silently broken by this change. Explicit regression
+ * coverage for that backward-compatibility guarantee, travelling years
+ * into the future to prove there is genuinely no hidden cutoff.
+ */
+test('D-0064: a legacy token minted with no expiry (the pre-D-0064 shape) still never expires', function () {
+    $tenant = Tenant::factory()->create();
+    $appointment = BookingFixture::appointmentFor($tenant);
+
+    $legacyToken = SignedTenantToken::issue('manage_booking', $tenant->id, $appointment->id);
+
+    // Carbon::setTestNow() rather than $this->travelTo() — see
+    // BookingControllerTest.php's own D-0064 test for why (a Larastan/Pest
+    // static-analysis stub gap, not a runtime issue).
+    Carbon::setTestNow(now()->addYears(5));
+
+    getJson("/api/bookings/manage/{$legacyToken}")->assertOk();
 });
 
 /**
