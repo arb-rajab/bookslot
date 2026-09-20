@@ -22,7 +22,7 @@
     "@nuxt/test-utils": "^4.3.2",
     "@playwright/test": "^1.63.0",
     "@types/node": "^26.5.1",
-    "@vue/test-utils": "^2.5.0",
+    "@vue/test-utils": "^2.5.1",
     "happy-dom": "^20.14.5",
     "typescript": "^5.9.3",
     "vitest": "^5.0.0",
