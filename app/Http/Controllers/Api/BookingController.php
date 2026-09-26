@@ -51,6 +51,12 @@ use Throwable;
  *      payment_confirmation_token's expiry. A customer who never completes
  *      payment has their slot released by this job, not left held forever.
  *
+ * D-0067: between step 1 and step 2 above, store() also rejects (releasing
+ * the just-taken hold the same way step 4 does) when the tenant has no
+ * connected Stripe account — the same pre-Stripe-call routing gate D-0066
+ * already built for refund()/chargeBalance(), applied here to close the one
+ * endpoint that gap left open.
+ *
  * Deliberately NOT behind the `tenant.context` middleware (see
  * routes/api.php) — that middleware wraps the whole request in one
  * transaction, which would hold a database connection and the
@@ -128,6 +134,31 @@ class BookingController extends Controller
         $appointment = $created['appointment'];
         $service = $created['service'];
         $tenant = Tenant::query()->findOrFail($tenantId);
+
+        // D-0067: same routing gap D-0066 closed for refund()/chargeBalance()
+        // — a tenant with no connected Stripe account (never onboarded, or
+        // deauthorized per D-0065 and not yet reconnected) has no account of
+        // its own for `create()`'s transfer_data/application_fee_amount to
+        // route through; omitting those params (StripePaymentIntentGateway's
+        // own null-branch) charges the customer's card through the
+        // PLATFORM's own Stripe account instead of failing. Checked here,
+        // before any Stripe call, and before the mandate is even rendered —
+        // same pre-Stripe-call gate discipline as D-0066, applied to the one
+        // remaining endpoint that shares this bug class. The pending_payment
+        // hold already taken above is released the same way a Stripe-call
+        // failure already releases it below, rather than left for the expiry
+        // job.
+        if ($tenant->stripe_connect_account_id === null) {
+            TenantContext::run($tenantId, function () use ($appointment) {
+                $appointment->status = 'cancelled';
+                $appointment->cancelled_by = 'system';
+                $appointment->cancelled_reason = 'stripe_account_not_connected';
+                $appointment->cancelled_at = now();
+                $appointment->save();
+            });
+
+            return response()->json(['error' => 'BOOKING_UNAVAILABLE'], 409);
+        }
 
         $mandate = $this->mandateRenderer->render($tenant, $service);
         $depositAmount = $service->price_amount - $mandate['balance_amount_disclosed'];

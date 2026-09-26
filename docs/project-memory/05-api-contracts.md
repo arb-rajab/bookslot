@@ -282,6 +282,21 @@ end time rather than booking-creation time.
   Rate-limited per (IP + tenant slug); a `Retry-After` header is included.
   Counts against the same limit whether or not the request body is
   well-formed — this middleware runs before validation.
+- `409 { "error": "BOOKING_UNAVAILABLE" }` — **added Session 40, D-0067.**
+  The tenant has no connected Stripe account (never completed Connect
+  onboarding, or deauthorized per D-0065 and not yet reconnected) — there is
+  no tenant Stripe account for this deposit to route through, so the request
+  is rejected before any Stripe call rather than silently charging the
+  platform's own account (D-0066's own fix for refund/balance-charge,
+  applied here to the one remaining endpoint that shared the gap). The
+  already-claimed hold is released immediately (`appointment` moved to
+  `cancelled`, `cancelled_reason: "stripe_account_not_connected"`), same as
+  the `502 PAYMENT_PROVIDER_UNAVAILABLE` cleanup above. Deliberately a
+  generic, Stripe-agnostic code/message — this is a public, unauthenticated,
+  customer-facing endpoint, so the response never names "Stripe" or
+  "Connect"; the frontend shows the customer a "this studio can't take
+  online bookings right now, please contact them directly" message, not the
+  owner-admin "reconnect Stripe in Settings" copy D-0066 shows the owner.
 
 ### 3. `POST /api/bookings/{token}/confirm-payment` — redesigned Session 7, D-0021
 
