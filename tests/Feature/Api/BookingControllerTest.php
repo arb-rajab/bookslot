@@ -29,7 +29,17 @@ beforeEach(function () {
  */
 function bookingTenant(): array
 {
-    $tenant = Tenant::factory()->create();
+    // D-0067: matches D-0066's own fix to ownerAndTenant() — Tenant::
+    // factory()'s own default leaves stripe_connect_account_id null, which
+    // is exactly the misrouting condition this file's own D-0067 tests
+    // exist to catch. Every test that isn't specifically about that gap
+    // gets a properly-connected tenant by default; the gap-specific tests
+    // below construct their own disconnected tenant directly, same pattern
+    // OwnerAppointmentControllerTest.php already uses.
+    $tenant = Tenant::factory()->create([
+        'stripe_connect_account_id' => 'acct_fake_connected',
+        'stripe_onboarding_status' => 'complete',
+    ]);
 
     return TenantContext::run($tenant->id, function () use ($tenant) {
         $service = Service::factory()->create([
@@ -187,4 +197,124 @@ test('D-0027: a slow Stripe call still commits TX1 before the external call reso
 
     $response->assertCreated();
     expect($elapsed)->toBeGreaterThanOrEqual(1.0);
+});
+
+// D-0067: the same misrouting gap D-0066 closed for refund()/chargeBalance()
+// — a tenant with no connected Stripe account (never onboarded, or
+// deauthorized per D-0065 and not yet reconnected) must not have a
+// customer's deposit silently routed to the PLATFORM's own Stripe account.
+// Reproduced first, per D-0066's own standard: before this file's
+// bookingTenant() helper and BookingController::store() were changed, this
+// exact test body (a null-connect tenant, asserting a 201) passed against
+// the unmodified controller — direct, first-hand confirmation the gap was
+// real, not just a theoretical reading of the code, the same way D-0066's
+// own entry found ownerAndTenant() had been unknowingly doing the whole
+// time. FakePaymentIntentGateway::create() (like the real
+// StripePaymentIntentGateway) has no connected-account validation of its
+// own — it happily "succeeds" regardless, which is exactly how the real
+// gateway's null-branch behaves too (omits transfer_data/
+// application_fee_amount rather than failing).
+test('D-0067: booking creation for a tenant with no connected Stripe account is rejected, never reaching Stripe — not silently routed to the platform account', function () {
+    $tenant = Tenant::factory()->create([
+        'stripe_connect_account_id' => null,
+        'stripe_onboarding_status' => 'not_started',
+    ]);
+    [$service, $staff] = TenantContext::run($tenant->id, function () use ($tenant) {
+        $service = Service::factory()->create([
+            'tenant_id' => $tenant->id,
+            'duration_minutes' => 60,
+            'price_amount' => 20000,
+            'currency' => 'usd',
+            'deposit_type' => 'fixed',
+            'deposit_fixed_amount' => 5000,
+            'deposit_percentage_bps' => null,
+            'buffer_before_minutes' => 0,
+            'buffer_after_minutes' => 15,
+        ]);
+        $staff = Staff::factory()->create(['tenant_id' => $tenant->id]);
+
+        return [$service, $staff];
+    });
+
+    $gateway = new FakePaymentIntentGateway;
+    app()->bind(PaymentIntentGateway::class, fn () => $gateway);
+
+    $response = postJson("/api/tenants/{$tenant->slug}/bookings", bookingRequestBody($service, $staff));
+
+    $response->assertStatus(409);
+    $response->assertJson(['error' => 'BOOKING_UNAVAILABLE']);
+    expect($gateway->callCount())->toBe(0);
+
+    // The hold taken by TX1 is released immediately, same cleanup path a
+    // Stripe-call failure already uses (D-0027) — not left for the expiry
+    // job, and no payment/mandate row exists since the request never got
+    // that far.
+    TenantContext::run($tenant->id, function () use ($tenant, $staff) {
+        $appointment = Appointment::query()->where('tenant_id', $tenant->id)->where('staff_id', $staff->id)->first();
+        expect($appointment)->not->toBeNull();
+        expect($appointment->status)->toBe('cancelled');
+        expect($appointment->cancelled_by)->toBe('system');
+        expect($appointment->cancelled_reason)->toBe('stripe_account_not_connected');
+        expect(PaymentMandate::query()->where('appointment_id', $appointment->id)->exists())->toBeFalse();
+    });
+});
+
+test('D-0067: the same rejection applies to a deauthorized tenant, not just one that never onboarded', function () {
+    $tenant = Tenant::factory()->create([
+        'stripe_connect_account_id' => null,
+        'stripe_onboarding_status' => 'deauthorized',
+    ]);
+    [$service, $staff] = TenantContext::run($tenant->id, function () use ($tenant) {
+        $service = Service::factory()->create([
+            'tenant_id' => $tenant->id,
+            'duration_minutes' => 60,
+            'price_amount' => 20000,
+            'currency' => 'usd',
+            'deposit_type' => 'fixed',
+            'deposit_fixed_amount' => 5000,
+            'deposit_percentage_bps' => null,
+            'buffer_before_minutes' => 0,
+            'buffer_after_minutes' => 15,
+        ]);
+        $staff = Staff::factory()->create(['tenant_id' => $tenant->id]);
+
+        return [$service, $staff];
+    });
+
+    $gateway = new FakePaymentIntentGateway;
+    app()->bind(PaymentIntentGateway::class, fn () => $gateway);
+
+    $response = postJson("/api/tenants/{$tenant->slug}/bookings", bookingRequestBody($service, $staff));
+
+    $response->assertStatus(409);
+    $response->assertJson(['error' => 'BOOKING_UNAVAILABLE']);
+    expect($gateway->callCount())->toBe(0);
+});
+
+test('D-0067: a merely restricted (still connected) tenant is NOT blocked by the account-routing check', function () {
+    $tenant = Tenant::factory()->create([
+        'stripe_connect_account_id' => 'acct_fake_restricted',
+        'stripe_onboarding_status' => 'restricted',
+    ]);
+    [$service, $staff] = TenantContext::run($tenant->id, function () use ($tenant) {
+        $service = Service::factory()->create([
+            'tenant_id' => $tenant->id,
+            'duration_minutes' => 60,
+            'price_amount' => 20000,
+            'currency' => 'usd',
+            'deposit_type' => 'fixed',
+            'deposit_fixed_amount' => 5000,
+            'deposit_percentage_bps' => null,
+            'buffer_before_minutes' => 0,
+            'buffer_after_minutes' => 15,
+        ]);
+        $staff = Staff::factory()->create(['tenant_id' => $tenant->id]);
+
+        return [$service, $staff];
+    });
+
+    $response = postJson("/api/tenants/{$tenant->slug}/bookings", bookingRequestBody($service, $staff));
+
+    $response->assertCreated();
+    $response->assertJsonPath('status', 'pending_payment');
 });

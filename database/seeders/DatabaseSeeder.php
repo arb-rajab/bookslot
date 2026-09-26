@@ -52,7 +52,18 @@ class DatabaseSeeder extends Seeder
                 'name' => 'Demo Tattoo Studio',
                 'timezone' => 'America/Toronto',
                 'currency' => 'usd',
-                'stripe_onboarding_status' => 'not_started',
+                // D-0067: a real bookable demo needs a connected Stripe
+                // account — BookingController::store() now (correctly)
+                // rejects deposit creation for a tenant with none, and this
+                // is exactly the seeded tenant the real booking flow (this
+                // docblock's own reason for existing) and the Playwright
+                // E2E suite's booking-creation specs book against.
+                // 'not_started' was never wrong before D-0067 existed, but
+                // now leaves this demo unable to complete its own one real
+                // job — a fully-onboarded demo studio is the realistic
+                // state to seed here, not an aspirational future step.
+                'stripe_connect_account_id' => 'acct_demo_seed_connected',
+                'stripe_onboarding_status' => 'complete',
             ],
         );
 

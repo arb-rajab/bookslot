@@ -173,6 +173,7 @@ function describeError(code: string): string {
     VALIDATION_FAILED: 'Please check the highlighted fields.',
     NOT_FOUND: 'That service or slot could not be found.',
     PAYMENT_PROVIDER_UNAVAILABLE: 'The payment provider is unavailable right now. Please try again.',
+    BOOKING_UNAVAILABLE: "This studio isn't able to accept online bookings right now. Please contact them directly to book.",
     BOOKING_EXPIRED: 'This booking hold has expired. Please start again.',
     INVALID_OR_EXPIRED_TOKEN: 'This booking link is no longer valid.',
     NETWORK_ERROR: 'Could not reach the booking server. Is the API running?',
