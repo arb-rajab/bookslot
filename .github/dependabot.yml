@@ -18,3 +18,12 @@ updates:
     directory: "/frontend"
     schedule:
       interval: "weekly"
+    ignore:
+      # TypeScript 7 is a ground-up rewrite (the Go-ported native compiler)
+      # whose package no longer exposes the classic `lib/tsc.js` entry point
+      # vue-tsc/@volar/typescript depend on to source-patch createProgram for
+      # .vue SFC checking — confirmed by reproducing the failure locally
+      # (PR #9), not just reading vue-tsc's changelog. Re-enable major-version
+      # bumps here once @volar/typescript ships real TS7 support.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
