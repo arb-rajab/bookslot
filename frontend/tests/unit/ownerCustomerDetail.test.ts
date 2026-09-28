@@ -58,7 +58,7 @@ beforeEach(async () => {
     '/api/owner/customers/undefined/export': () => ({ status: 200, body: exportBody() }),
   }
   server = createServer((req, res) => {
-    const handler = req.url ? routes[req.url] : undefined
+    const handler = req.url && Object.hasOwn(routes, req.url) ? routes[req.url] : undefined
     if (!handler) {
       res.writeHead(404).end()
       return

@@ -24,7 +24,7 @@ beforeEach(async () => {
     '/api/owner/services': () => ({ status: 200, body: { services: [] } }),
   }
   server = createServer((req, res) => {
-    const handler = req.url ? routes[req.url] : undefined
+    const handler = req.url && Object.hasOwn(routes, req.url) ? routes[req.url] : undefined
     if (!handler) {
       res.writeHead(404).end()
       return
