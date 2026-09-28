@@ -253,3 +253,49 @@ jobs:
           name: playwright-report
           path: frontend/playwright-report/
           retention-days: 7
+
+  # Secret scanning over full git history (fetch-depth: 0), same pattern
+  # as the sibling repos in this portfolio. GITHUB_TOKEN is the runner's
+  # own short-lived token, used by the action to read PR commit ranges.
+  gitleaks:
+    name: Secret scanning (gitleaks)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Static analysis for the frontend (Nuxt/TypeScript). PHP is deliberately
+  # absent: CodeQL has no PHP language pack (supported: c-cpp, csharp, go,
+  # java-kotlin, javascript-typescript, python, ruby, rust, swift, actions),
+  # so the Laravel backend is covered by PHPStan/Larastan in the backend job
+  # instead. Revisit if CodeQL ever adds PHP.
+  codeql:
+    name: CodeQL analysis
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
