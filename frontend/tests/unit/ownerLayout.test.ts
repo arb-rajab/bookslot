@@ -23,7 +23,7 @@ let routes: Record<string, (req: import('node:http').IncomingMessage) => { statu
 beforeEach(async () => {
   routes = { '/sanctum/csrf-cookie': () => ({ status: 204, body: null }) }
   server = createServer((req, res) => {
-    const handler = req.url ? routes[req.url] : undefined
+    const handler = req.url && Object.hasOwn(routes, req.url) ? routes[req.url] : undefined
     if (!handler) {
       res.writeHead(404).end()
       return
