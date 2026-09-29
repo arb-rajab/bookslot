@@ -299,3 +299,21 @@ jobs:
       - uses: github/codeql-action/analyze@v3
         with:
           category: "/language:${{ matrix.language }}"
+
+  # Dependency vulnerability scanning (OSV database) across both halves of
+  # the stack — composer.lock (Laravel backend) and frontend/package-lock.json
+  # (Nuxt). Same tool the sibling repos in this portfolio (privacy-forge,
+  # laravel-consent-guard) use. Fails the job on any known-vulnerable pinned
+  # version; scans lockfiles only, so no install step is needed.
+  dependency-scan:
+    name: Dependency scanning (osv-scanner)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: google/osv-scanner-action/osv-scanner-action@v2.6.0
+        with:
+          scan-args: |-
+            --lockfile=composer.lock
+            --lockfile=frontend/package-lock.json
