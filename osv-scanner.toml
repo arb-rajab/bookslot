@@ -1,0 +1,15 @@
+[[PackageOverrides]]
+name = "braces"
+version = "3.0.3"
+ecosystem = "npm"
+ignore = true
+effectiveUntil = 2026-11-15T00:00:00Z
+reason = "GHSA-vfj7-8cjw-p6xm, no upstream fix available as of 2026-10-04. Only reachable via frontend/package-lock.json: nuxt > @nuxt/nitro-server > nitropack > globby@16.2.4 > micromatch@4.0.8 > braces@3.0.3. Nitropack uses globby at build time (file globbing while assembling the Nitro server build); it is build tooling, not imported by app code and not part of the runtime frontend bundle."
+
+[[PackageOverrides]]
+name = "node-forge"
+version = "1.4.0"
+ecosystem = "npm"
+ignore = true
+effectiveUntil = 2026-11-15T00:00:00Z
+reason = "GHSA-86w9-cpqp-85rv — same advisory already allowlisted in pulsewatch-mobile (scripts/check-npm-audit.mjs, same 2026-11-15 expiry, kept in sync for easier portfolio-wide tracking). No upstream fix as of 2026-10-04. Only reachable via frontend/package-lock.json: nuxt > @nuxt/cli > listhen@1.10.1 > node-forge@1.4.0. listhen is the Nuxt CLI's local dev-server listener (HTTPS cert generation for `nuxt dev`); dev tooling only, not part of the production frontend bundle."
