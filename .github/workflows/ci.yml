@@ -319,20 +319,22 @@ jobs:
             --lockfile=composer.lock
             --lockfile=frontend/package-lock.json
             --format=markdown
-            --output=/tmp/osv-results.md
+            --output=osv-results.md
 
       # TEMPORARY - removed again before this PR merges. This failing required
       # check is blocking main's own branch protection plus 4 open Dependabot
       # PRs; the raw job log is unreadable from the investigating sandbox (it
       # 302s to a blob.core.windows.net URL the sandbox's egress proxy blocks),
       # so emit the actual osv-scanner findings as a check-run annotation
-      # instead, readable via the Checks API.
+      # instead, readable via the Checks API. (/tmp isn't shared with the
+      # action's own Docker container; GITHUB_WORKSPACE is, so write there.)
       - name: Emit osv-scanner findings as annotation (temporary)
         if: always()
         run: |
           encode() { sed -z 's/%/%25/g; s/\r/%0D/g; s/\n/%0A/g'; }
-          if [ -f /tmp/osv-results.md ]; then
-            out="$(cat /tmp/osv-results.md)"
+          ls -la . | head -20
+          if [ -f osv-results.md ]; then
+            out="$(cat osv-results.md)"
           else
             out="(no output file produced)"
           fi
