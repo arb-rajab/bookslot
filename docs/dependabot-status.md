@@ -16,7 +16,8 @@ _Last updated: 2026-10-08. Maintained during the Dependabot clean-up pass; updat
 
 ## Time-limited exemptions
 
-- `osv-scanner.toml`: `braces` 3.0.3 (GHSA-vfj7-8cjw-p6xm), `node-forge` 1.4.0 (GHSA-86w9-cpqp-85rv), `simple-git` 3.36.0 + `@simple-git/argv-parser` 1.1.1 (GHSA-858h/-g4wm/-x6jw/-v5rq-49vh-5v5c). All via Nuxt build/dev tooling; `effectiveUntil` 2026-11-15. simple-git 4 breaks `nuxt build` (no default export) and no released Nuxt moves @nuxt/devtools off 3.x.
+- `osv-scanner.toml`, by advisory ID (`IgnoredVulns`, `ignoreUntil` 2026-11-15): GHSA-vfj7-8cjw-p6xm (`braces` 3.0.3), GHSA-86w9-cpqp-85rv (`node-forge` 1.4.0), GHSA-858h-whjf-mvg5 / GHSA-g4wm-2vf7-vfgr / GHSA-x6jw-m9v5-85vh (`simple-git` 3.36.0), GHSA-v5rq-49vh-5v5c (`@simple-git/argv-parser` 1.1.1). All via Nuxt build/dev tooling. simple-git 4 breaks `nuxt build` (no default export) and no released Nuxt moves @nuxt/devtools off 3.x (only a DevTools 4.0.0 beta has dropped it).
+- These were package-level `PackageOverrides` until 2026-10-08, which would also have hidden any new advisory against those versions. By ID, a new advisory fails the scan. Approved by the repo owner 2026-10-08 as a narrowing of the existing exemptions (same advisories, same expiry).
 
 ## Notes
 
