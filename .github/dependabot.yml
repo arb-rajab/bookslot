@@ -27,6 +27,11 @@ updates:
       # bumps here once @volar/typescript ships real TS7 support.
       - dependency-name: "typescript"
         update-types: ["version-update:semver-major"]
+      # @types/node must track the Node major CI runs (ci.yml's setup-node,
+      # currently 22), so a newer major would type APIs the runtime lacks.
+      # Move it together with the node-version in ci.yml, not on its own.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
   # Service images pinned in docker-compose*.yml
   - package-ecosystem: "docker-compose"
     directory: "/"

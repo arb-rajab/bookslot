@@ -321,20 +321,14 @@ of preference:
   ever needs a *major*-version jump, this "Nuxt insulates us" reasoning
   should be re-checked, not assumed to still hold — Nuxt's own internal
   vue-router usage could still be affected even if app code isn't.
-- **`@types/node` bumps can silently drift ahead of the Node version CI
-  actually runs on — this repo already has that drift, pre-existing and
-  unrelated to any one bump.** `.github/workflows/ci.yml` pins
-  `node-version: '22'` but `frontend/package.json` requires
-  `@types/node@^26.x` (true both before and after the `26.3.0 → 26.5.1`
-  Dependabot bump reviewed this session). This didn't fail anything —
-  `@types/node` types are additive/superset in practice and typecheck was
-  green in CI and confirmed clean locally — but it's worth knowing this
-  mismatch exists so a future session doesn't waste time treating a real
-  Node-22-vs-26-API typecheck failure as some other kind of bug if one
-  ever surfaces from it. Not fixed this session (out of this task's
-  scope) — either pin `@types/node` to the `^22.x` line or bump the CI
-  runner's actual Node version to close the gap, whichever the project
-  actually wants going forward.
+- **`@types/node` must track the Node version CI actually runs on.** It
+  had drifted: `.github/workflows/ci.yml` pins `node-version: '22'` while
+  `frontend/package.json` had `@types/node@^26.x`, which types APIs Node 22
+  doesn't have. Fixed on 2026-10-08: it is now `^22.20.5` and
+  `.github/dependabot.yml` ignores `@types/node` majors. Typecheck and
+  Vitest were clean on the pinned version. If the CI Node version is ever
+  raised, raise `@types/node` to the same major in the same PR (and drop or
+  adjust the Dependabot ignore) instead of letting Dependabot move it alone.
 - **This session's tools still have no GitHub Dependabot *security
   alerts* API access** — same real, unchanged gap every prior session
   documented for the version-bump PRs themselves (which ARE directly
