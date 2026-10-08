@@ -27,3 +27,13 @@ updates:
       # bumps here once @volar/typescript ships real TS7 support.
       - dependency-name: "typescript"
         update-types: ["version-update:semver-major"]
+  # Service images pinned in docker-compose*.yml
+  - package-ecosystem: "docker-compose"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    ignore:
+      # Major bumps of stateful services (databases, brokers, search) need a
+      # deliberate data-migration plan, not a drive-by version bump.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
