@@ -7,7 +7,7 @@ _Last updated: 2026-10-08. Maintained during the Dependabot clean-up pass; updat
 - Ecosystems covered: composer (`/`), github-actions (`/`), npm (`/frontend`), docker-compose (`/`).
 - Grouping: none (one PR per update).
 - Schedule: weekly.
-- Ignore rules: `typescript` majors in `/frontend` (TypeScript 7 drops the `lib/tsc` entry point that vue-tsc/@volar rely on); docker-compose image majors (stateful services need a deliberate migration).
+- Ignore rules: `typescript` majors in `/frontend` (TypeScript 7 drops the `lib/tsc` entry point that vue-tsc/@volar rely on); `@types/node` majors in `/frontend` (the types track the Node major CI runs, now 22; raise both together); docker-compose image majors (stateful services need a deliberate migration).
 
 ## State at last update
 
