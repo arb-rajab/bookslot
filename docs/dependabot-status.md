@@ -13,6 +13,7 @@ _Last updated: 2026-10-08. Maintained during the Dependabot clean-up pass; updat
 
 - Open Dependabot PRs: 0 (each merged or closed only after reading its checks).
 - Default-branch CI: green at last check.
+- Last full rescan: 2026-10-08. Checked open PRs, default-branch and scheduled CI, Dependabot update jobs, ecosystem coverage against the manifests in the repo, Actions pins, exemption expiry dates, stray branches, and (new this pass) a local full-history gitleaks 8.28.0 scan. No new gaps. The failed composer update job (2026-10-08 18:10 UTC) predates the PHP-floor fix in #59; the next weekly run is the first to use it. The simple-git security-update jobs fail because simple-git 4 breaks `nuxt build` (see the exemptions above).
 
 ## Time-limited exemptions
 
@@ -24,6 +25,7 @@ _Last updated: 2026-10-08. Maintained during the Dependabot clean-up pass; updat
 - `vue-tsc` is incompatible with TypeScript 7; do not take the TS major until it is.
 - Flaky Vitest/E2E steps occasionally fail on unrelated PRs; one re-run on the same commit is the accepted check.
 - `require.php` is `^8.4.1`, not `^8.4`. Dependabot resolves composer updates against the lowest PHP the constraint allows, and `^8.4` meant 8.4.0, below the 8.4.1 floor of the locked Symfony 8.1 / PHPUnit 13 packages. Every composer update job failed (`dependency_file_not_resolvable`, first seen on larastan) until this was raised on 2026-10-08.
+- Merge policy (deliberate choice by the repo owner, 2026-10-08): every PR, major-version dependency bumps included, is merged as soon as all of its required checks are green, confirmed per PR. This repo is a code showcase with no business or sensitive dependency, so green checks are the only gate. Red, pending or conflicted PRs are fixed or closed instead.
 
 ## Deferred (not re-raised each pass)
 
