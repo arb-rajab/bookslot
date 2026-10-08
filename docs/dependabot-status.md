@@ -23,6 +23,7 @@ _Last updated: 2026-10-08. Maintained during the Dependabot clean-up pass; updat
 
 - `vue-tsc` is incompatible with TypeScript 7; do not take the TS major until it is.
 - Flaky Vitest/E2E steps occasionally fail on unrelated PRs; one re-run on the same commit is the accepted check.
+- `require.php` is `^8.4.1`, not `^8.4`. Dependabot resolves composer updates against the lowest PHP the constraint allows, and `^8.4` meant 8.4.0, below the 8.4.1 floor of the locked Symfony 8.1 / PHPUnit 13 packages. Every composer update job failed (`dependency_file_not_resolvable`, first seen on larastan) until this was raised on 2026-10-08.
 
 ## Deferred (not re-raised each pass)
 
