@@ -50,7 +50,7 @@
         "test:unit": "pest tests/Unit",
         "test:feature": "pest tests/Feature",
         "test:tenant-isolation": "pest tests/TenantIsolation",
-        "test:fast": "pest --exclude-group=slow,queue-broker",
+        "test:fast": "pest --exclude-group=queue-broker",
         "test:slow": "pest --group=slow",
         "test:queue-broker": "pest --group=queue-broker",
         "ci:check": [

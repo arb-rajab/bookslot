@@ -192,26 +192,18 @@ of preference:
 
 ## Test suite shape — don't run more than you need
 
-- **`composer test:fast` (`pest --exclude-group=slow,queue-broker`) does
-  NOT actually exclude `queue-broker` right now — verified directly
-  (Session 22).** No test in this repo currently carries a `slow` tag
-  (`./vendor/bin/pest --group=slow` finds zero tests) — combining that
-  nonexistent group name with the real `queue-broker` one in a single
-  `--exclude-group=a,b` silently makes the *entire* exclusion a no-op in
-  this Pest/PHPUnit version, and all 3 `queue-broker` RabbitMQ-integration
-  tests run anyway. This means `composer test:fast`/`composer ci:check`
-  require a real local RabbitMQ broker to pass at all right now, contrary
-  to what this file and `07-testing-strategy.md` otherwise say about that
-  group being excluded from the fast gate. Two ways to actually get the
-  fast, broker-free gate this script is supposed to give you: run
-  `./vendor/bin/pest --exclude-group=queue-broker` directly (drop the
-  nonexistent `slow`), or just stand up RabbitMQ anyway (this file's own
-  section below) since Session 19 already made it necessary for other
-  reasons. The real fix — adding a `slow` tag to at least one real test, or
-  changing `composer.json`'s `test:fast` script to stop naming a group that
-  doesn't exist — was not made this session (out of D-0048's own scope);
-  flagged here so it isn't rediscovered by hand-tracing a config file
-  again.
+- **`composer test:fast` is `pest --exclude-group=queue-broker`.** It used
+  to read `--exclude-group=slow,queue-broker`, but no test in this repo
+  carries a `slow` tag (`./vendor/bin/pest --group=slow` finds zero
+  tests). Session 22 observed that naming that nonexistent group made the
+  whole exclusion a no-op, so the 3 `queue-broker` RabbitMQ-integration
+  tests ran in the fast gate anyway and needed a real broker. The script
+  now names only the real group. (The fix was made without a local Pest
+  run, since the sandbox had PHP 8.3 and the repo requires 8.4; CI's
+  `composer test:fast` step is the check.) `test:queue-broker` still runs
+  those tests on their own, and CI's services give both jobs a broker.
+  If a `slow` tag is ever added to a real test, add it back to the
+  `--exclude-group` list.
 - The fast backend gate (`composer test:fast` / `php artisan test
   --testsuite=Feature,TenantIsolation`) is ~135-146 tests, ~10-16 seconds
   against a real local Postgres (with the broker caveat immediately
