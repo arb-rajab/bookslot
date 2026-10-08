@@ -13,3 +13,19 @@ ecosystem = "npm"
 ignore = true
 effectiveUntil = 2026-11-15T00:00:00Z
 reason = "GHSA-86w9-cpqp-85rv — same advisory already allowlisted in pulsewatch-mobile (scripts/check-npm-audit.mjs, same 2026-11-15 expiry, kept in sync for easier portfolio-wide tracking). No upstream fix as of 2026-10-04. Only reachable via frontend/package-lock.json: nuxt > @nuxt/cli > listhen@1.10.1 > node-forge@1.4.0. listhen is the Nuxt CLI's local dev-server listener (HTTPS cert generation for `nuxt dev`); dev tooling only, not part of the production frontend bundle."
+
+[[PackageOverrides]]
+name = "simple-git"
+version = "3.36.0"
+ecosystem = "npm"
+ignore = true
+effectiveUntil = 2026-11-15T00:00:00Z
+reason = "GHSA-858h-whjf-mvg5, GHSA-g4wm-2vf7-vfgr, GHSA-x6jw-m9v5-85vh. Fixed only in simple-git >= 4.0.1; forcing that via an npm override breaks `nuxt build` (v4 has no default export, which the consumer imports), and no released nuxt (checked 4.6.0) moves @nuxt/devtools off simple-git 3.x. Only reachable via frontend/package-lock.json: nuxt > @nuxt/devtools@3.4.2 > simple-git@3.36.0. Nuxt DevTools is dev-server tooling, not part of the production frontend bundle. Re-check when a nuxt/@nuxt/devtools release adopts simple-git 4."
+
+[[PackageOverrides]]
+name = "@simple-git/argv-parser"
+version = "1.1.1"
+ecosystem = "npm"
+ignore = true
+effectiveUntil = 2026-11-15T00:00:00Z
+reason = "GHSA-v5rq-49vh-5v5c. Fixed in 2.0.1, which is required alongside simple-git 4 (see the simple-git entry). Only reachable via frontend/package-lock.json: nuxt > @nuxt/devtools@3.4.2 > simple-git@3.36.0 > @simple-git/argv-parser@1.1.1. Dev tooling only, same expiry as the simple-git entry."
