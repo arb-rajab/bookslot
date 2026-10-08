@@ -1,31 +1,32 @@
-[[PackageOverrides]]
-name = "braces"
-version = "3.0.3"
-ecosystem = "npm"
-ignore = true
-effectiveUntil = 2026-11-15T00:00:00Z
-reason = "GHSA-vfj7-8cjw-p6xm, no upstream fix available as of 2026-10-04. Only reachable via frontend/package-lock.json: nuxt > @nuxt/nitro-server > nitropack > globby@16.2.4 > micromatch@4.0.8 > braces@3.0.3. Nitropack uses globby at build time (file globbing while assembling the Nitro server build); it is build tooling, not imported by app code and not part of the runtime frontend bundle."
+# Exemptions are by advisory ID, not by package: a NEW advisory against one of these
+# packages still fails the scan. Re-check each before 2026-11-15; drop it once fixed.
 
-[[PackageOverrides]]
-name = "node-forge"
-version = "1.4.0"
-ecosystem = "npm"
-ignore = true
-effectiveUntil = 2026-11-15T00:00:00Z
-reason = "GHSA-86w9-cpqp-85rv — same advisory already allowlisted in pulsewatch-mobile (scripts/check-npm-audit.mjs, same 2026-11-15 expiry, kept in sync for easier portfolio-wide tracking). No upstream fix as of 2026-10-04. Only reachable via frontend/package-lock.json: nuxt > @nuxt/cli > listhen@1.10.1 > node-forge@1.4.0. listhen is the Nuxt CLI's local dev-server listener (HTTPS cert generation for `nuxt dev`); dev tooling only, not part of the production frontend bundle."
+[[IgnoredVulns]]
+id = "GHSA-vfj7-8cjw-p6xm"
+ignoreUntil = 2026-11-15T00:00:00Z
+reason = "braces 3.0.3, no upstream fix available as of 2026-10-04. Only reachable via frontend/package-lock.json: nuxt > @nuxt/nitro-server > nitropack > globby@16.2.4 > micromatch@4.0.8 > braces@3.0.3. Nitropack uses globby at build time (file globbing while assembling the Nitro server build); it is build tooling, not imported by app code and not part of the runtime frontend bundle."
 
-[[PackageOverrides]]
-name = "simple-git"
-version = "3.36.0"
-ecosystem = "npm"
-ignore = true
-effectiveUntil = 2026-11-15T00:00:00Z
-reason = "GHSA-858h-whjf-mvg5, GHSA-g4wm-2vf7-vfgr, GHSA-x6jw-m9v5-85vh. Fixed only in simple-git >= 4.0.1; forcing that via an npm override breaks `nuxt build` (v4 has no default export, which the consumer imports), and no released nuxt (checked 4.6.0) moves @nuxt/devtools off simple-git 3.x. Only reachable via frontend/package-lock.json: nuxt > @nuxt/devtools@3.4.2 > simple-git@3.36.0. Nuxt DevTools is dev-server tooling, not part of the production frontend bundle. Re-check when a nuxt/@nuxt/devtools release adopts simple-git 4."
+[[IgnoredVulns]]
+id = "GHSA-86w9-cpqp-85rv"
+ignoreUntil = 2026-11-15T00:00:00Z
+reason = "node-forge 1.4.0, same advisory already allowlisted in pulsewatch-mobile (same 2026-11-15 expiry). No upstream fix as of 2026-10-04. Only reachable via frontend/package-lock.json: nuxt > @nuxt/cli > listhen@1.10.1 > node-forge@1.4.0. listhen is the Nuxt CLI's local dev-server listener (HTTPS cert generation for `nuxt dev`); dev tooling only, not part of the production frontend bundle."
 
-[[PackageOverrides]]
-name = "@simple-git/argv-parser"
-version = "1.1.1"
-ecosystem = "npm"
-ignore = true
-effectiveUntil = 2026-11-15T00:00:00Z
-reason = "GHSA-v5rq-49vh-5v5c. Fixed in 2.0.1, which is required alongside simple-git 4 (see the simple-git entry). Only reachable via frontend/package-lock.json: nuxt > @nuxt/devtools@3.4.2 > simple-git@3.36.0 > @simple-git/argv-parser@1.1.1. Dev tooling only, same expiry as the simple-git entry."
+[[IgnoredVulns]]
+id = "GHSA-858h-whjf-mvg5"
+ignoreUntil = 2026-11-15T00:00:00Z
+reason = "simple-git 3.36.0, fixed in 4.0.0. Only reachable via frontend/package-lock.json: nuxt > @nuxt/devtools@3.4.2 > simple-git@3.36.0. Nuxt DevTools is dev-server tooling, not part of the production frontend bundle. Forcing simple-git 4 via an npm override breaks `nuxt build` (v4 has no default export, which the consumer imports), and no released nuxt (checked 4.6.0) moves @nuxt/devtools off simple-git 3.x."
+
+[[IgnoredVulns]]
+id = "GHSA-g4wm-2vf7-vfgr"
+ignoreUntil = 2026-11-15T00:00:00Z
+reason = "simple-git 3.36.0, fixed in 4.0.0. Same path and blocker as GHSA-858h-whjf-mvg5: nuxt > @nuxt/devtools@3.4.2 > simple-git@3.36.0, dev tooling only."
+
+[[IgnoredVulns]]
+id = "GHSA-x6jw-m9v5-85vh"
+ignoreUntil = 2026-11-15T00:00:00Z
+reason = "simple-git 3.36.0, fixed in 4.0.1. Same path and blocker as GHSA-858h-whjf-mvg5: nuxt > @nuxt/devtools@3.4.2 > simple-git@3.36.0, dev tooling only."
+
+[[IgnoredVulns]]
+id = "GHSA-v5rq-49vh-5v5c"
+ignoreUntil = 2026-11-15T00:00:00Z
+reason = "@simple-git/argv-parser 1.1.1, fixed in 2.0.1, which ships only alongside simple-git 4. Only reachable via frontend/package-lock.json: nuxt > @nuxt/devtools@3.4.2 > simple-git@3.36.0 > @simple-git/argv-parser@1.1.1. Dev tooling only."
