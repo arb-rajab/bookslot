@@ -12,7 +12,7 @@ permissions:
 jobs:
   backend:
     name: Backend (lint, static analysis, fast + tenant-isolation tests)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     services:
       postgres:
@@ -132,7 +132,7 @@ jobs:
   # prepared.
   frontend:
     name: Frontend (typecheck, unit tests, real-browser E2E)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     services:
       postgres:
@@ -263,7 +263,7 @@ jobs:
   # own short-lived token, used by the action to read PR commit ranges.
   gitleaks:
     name: Secret scanning (gitleaks)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v7
@@ -281,7 +281,7 @@ jobs:
   # instead. Revisit if CodeQL ever adds PHP.
   codeql:
     name: CodeQL analysis
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       actions: read
       contents: read
@@ -311,7 +311,7 @@ jobs:
   # version; scans lockfiles only, so no install step is needed.
   dependency-scan:
     name: Dependency scanning (osv-scanner)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v7
