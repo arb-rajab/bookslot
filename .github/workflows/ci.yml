@@ -15,9 +15,15 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
 
+    # Service images come from mirror.gcr.io (Google's cache of popular Docker
+    # Hub images: no pull-rate limit, no Docker Hub auth outage). Service
+    # containers start before any step, so they cannot use the daemon-level
+    # mirror (with Docker Hub fallback) that other jobs set up. The cache only
+    # holds frequently pulled tags: if a new tag 404s there, use the plain
+    # Docker Hub name for that service.
     services:
       postgres:
-        image: postgres:17
+        image: mirror.gcr.io/library/postgres:17
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres_superuser_local_only
@@ -31,7 +37,7 @@ jobs:
           --health-retries 10
 
       redis:
-        image: redis:7-alpine
+        image: mirror.gcr.io/library/redis:7-alpine
         ports:
           - 6379:6379
         options: >-
@@ -46,7 +52,7 @@ jobs:
       # broker suite share one checkout/install/migrate, matching this
       # project's existing single-job convention.
       rabbitmq:
-        image: rabbitmq:4-management-alpine
+        image: mirror.gcr.io/library/rabbitmq:4-management-alpine
         env:
           RABBITMQ_DEFAULT_USER: bookslot
           RABBITMQ_DEFAULT_PASS: bookslot_local_only
@@ -136,9 +142,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
 
+    # Service images: mirror.gcr.io, see the note on the first services block.
     services:
       postgres:
-        image: postgres:17
+        image: mirror.gcr.io/library/postgres:17
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres_superuser_local_only
@@ -152,7 +159,7 @@ jobs:
           --health-retries 10
 
       redis:
-        image: redis:7-alpine
+        image: mirror.gcr.io/library/redis:7-alpine
         ports:
           - 6379:6379
         options: >-
@@ -162,7 +169,7 @@ jobs:
           --health-retries 10
 
       rabbitmq:
-        image: rabbitmq:4-management-alpine
+        image: mirror.gcr.io/library/rabbitmq:4-management-alpine
         env:
           RABBITMQ_DEFAULT_USER: bookslot
           RABBITMQ_DEFAULT_PASS: bookslot_local_only
