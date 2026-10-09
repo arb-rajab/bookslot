@@ -2,20 +2,16 @@
 
 ## Status
 
-This is a **private**, pre-code repository (Session 0/1 — discovery and
-business framing). No application, infrastructure, or customer data exists
-yet. This policy exists now so it is already in place once code and real
-customer data appear, not because there is anything to report yet.
+This repository is public and holds the application code. There are no
+published releases; only the latest commit on `main` receives security
+fixes.
 
 ## Reporting a vulnerability
 
-This repository is private and has no external contributors or public
-issue tracker exposure. If you are an authorized collaborator and find a
-security issue (in code, infrastructure config, or a dependency), email
-yaeouk@gmail.com directly rather than opening a regular issue — do not
-describe exploitable details in a place other collaborators or future
-integrations might expose (e.g., a shared project-management tool) until
-triaged.
+Please **do not** open a public GitHub issue for security vulnerabilities.
+
+Instead, use GitHub's private vulnerability reporting (Security tab →
+"Report a vulnerability"), or email yaeouk@gmail.com directly.
 
 Please include:
 - A description of the vulnerability and its potential impact
@@ -27,12 +23,12 @@ Please include:
 1. Acknowledgement within 5 business days.
 2. Assessment and severity rating (informal CVSS).
 3. Fix developed on a private branch.
-4. No public disclosure — this is closed-source commercial software with no
-   public release channel; fixes ship silently to the running product.
+4. Coordinated disclosure once a fix is merged, with credit to the reporter
+   unless anonymity is requested.
 
 ## Scope
 
-Covers this repository's own code and configuration once it exists. Does
+Covers this repository's own code and configuration. Does
 not cover third-party dependencies (report those upstream) or infrastructure
 providers (Stripe, hosting, email/SMS providers) — report those directly to
 the provider per their own security policy.
