@@ -29,6 +29,7 @@ _Last updated: 2026-10-09. Maintained during the Dependabot clean-up pass; updat
 - Merge policy (deliberate choice by the repo owner, 2026-10-08): every PR, major-version dependency bumps included, is merged as soon as all of its required checks are green, confirmed per PR. This repo is a code showcase with no business or sensitive dependency, so green checks are the only gate. Red, pending or conflicted PRs are fixed or closed instead.
 - Every Linux job runs on `ubuntu-24.04` (pinned 2026-10-09; it is what `ubuntu-latest` resolved to). GitHub moves `ubuntu-latest` to Ubuntu 26 from 2026-10-19, and an unattended image change could turn every check red at once. Move to `ubuntu-26.04` deliberately, in one PR whose CI has run on it. Dependabot does not bump `runs-on` labels.
 - `SECURITY.md` corrected 2026-10-09 (rescan cycle 2): it still described a private, pre-code repository with no public disclosure. It now sends reporters to GitHub private vulnerability reporting, which is disabled here. Enabling it needs the Administration permission on the owner's token; escalation requested 2026-10-09.
+- CI runs `nuxt build` (added 2026-10-09, rescan cycle 3). Until then the only frontend build in CI was `nuxt dev` inside the E2E step, so an update that breaks only the production build (simple-git 4 is one) could pass every required check.
 
 ## Deferred (not re-raised each pass)
 
