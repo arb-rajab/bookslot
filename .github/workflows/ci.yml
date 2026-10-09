@@ -13,6 +13,7 @@ jobs:
   backend:
     name: Backend (lint, static analysis, fast + tenant-isolation tests)
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
 
     services:
       postgres:
@@ -133,6 +134,7 @@ jobs:
   frontend:
     name: Frontend (typecheck, unit tests, real-browser E2E)
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
 
     services:
       postgres:
@@ -272,6 +274,7 @@ jobs:
   gitleaks:
     name: Secret scanning (gitleaks)
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v7
@@ -290,6 +293,7 @@ jobs:
   codeql:
     name: CodeQL analysis
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     permissions:
       actions: read
       contents: read
@@ -320,6 +324,7 @@ jobs:
   dependency-scan:
     name: Dependency scanning (osv-scanner)
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v7
