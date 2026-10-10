@@ -2,7 +2,7 @@
     "$schema": "https://getcomposer.org/schema.json",
     "name": "arb-rajab/bookslot",
     "type": "project",
-    "description": "Booking, deposits, and no-show protection for appointment-based service businesses (private, proprietary).",
+    "description": "Booking, deposits, and no-show protection for appointment-based service businesses (proprietary).",
     "keywords": ["laravel", "api"],
     "license": "proprietary",
     "require": {
