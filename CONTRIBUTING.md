@@ -51,7 +51,8 @@ work around or skip under time pressure.
 
 See [`SECURITY.md`](SECURITY.md).
 
-## Confidentiality
+## Licensing
 
-Everything in this repository is confidential. Do not share code, docs, or
-data outside people explicitly authorized by the repository owner.
+This repository is public, but it is proprietary, not open source (see
+[`LICENSE`](LICENSE)). Viewing it grants no right to reuse its code, docs,
+or data outside what the repository owner explicitly authorizes.
