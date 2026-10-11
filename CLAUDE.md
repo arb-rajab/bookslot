@@ -809,3 +809,13 @@ of preference:
   verified when the actions have real state preconditions that conflict,
   the same way the Pest/Playwright suites already do with their own
   per-test fixtures.
+
+## 2026-10-11 — Nuxt 4.6 resolves prefetch paths against `window.location.href`
+
+- Nuxt 4.6's link prefetcher runs `new URL(path, window.location.href)` after
+  every navigation. A Vitest test that swaps `window.location` for a stub
+  must give the stub a real absolute `href` (start from the original
+  `window.location.href`), or the test fails with `TypeError: Invalid URL`
+  (`input: '/', base: ''`) from `prefetch-util.js`, not from app code.
+- No unit test here waits with a fixed `setTimeout` any more:
+  `ownerLayout.test.ts` was the last one and now uses `flushUntil()`.
