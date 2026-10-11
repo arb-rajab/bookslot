@@ -84,10 +84,13 @@ describe('owner/settings/stripe/index.vue', () => {
     })
 
     const originalLocation = window.location
-    let assignedHref = ''
+    // Start from the real page URL: Nuxt's link prefetcher resolves paths
+    // against `window.location.href` and throws on an empty base.
+    const initialHref = originalLocation.href
+    let assignedHref = initialHref
     // @ts-expect-error -- replacing window.location for this test only, restored below
     delete window.location
-    // @ts-expect-error -- minimal stand-in, only `href` is used by the page
+    // @ts-expect-error -- minimal stand-in, only `href` is used by the page and Nuxt's prefetcher
     window.location = {
       get href() { return assignedHref },
       set href(value: string) { assignedHref = value },
@@ -98,7 +101,7 @@ describe('owner/settings/stripe/index.vue', () => {
       await flushUntil(() => wrapper.find('button').exists())
 
       await wrapper.find('button').trigger('click')
-      await flushUntil(() => assignedHref !== '')
+      await flushUntil(() => assignedHref !== initialHref)
 
       expect(assignedHref).toBe('https://connect.stripe.com/setup/e/acct_123/xyz')
     } finally {
