@@ -4,6 +4,7 @@ import type { AddressInfo } from 'node:net'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import OwnerLayout from '~/layouts/owner.vue'
+import { flushUntil } from './support/waitFor'
 
 /**
  * layouts/owner.vue is the one component every /owner/* page shares
@@ -57,7 +58,7 @@ describe('layouts/owner.vue', () => {
     await wrapper.find('input[type="password"]').setValue('bad-password')
     await wrapper.find('form.login-form').trigger('submit.prevent')
 
-    await new Promise((resolve) => setTimeout(resolve, 50))
+    await flushUntil(() => wrapper.text().includes('Incorrect email or password'))
 
     expect(wrapper.text()).toContain('Incorrect email or password')
   })
@@ -75,7 +76,7 @@ describe('layouts/owner.vue', () => {
     await wrapper.find('input[type="password"]').setValue('password')
     await wrapper.find('form.login-form').trigger('submit.prevent')
 
-    await new Promise((resolve) => setTimeout(resolve, 50))
+    await flushUntil(() => !wrapper.find('form.login-form').exists())
 
     expect(wrapper.find('form.login-form').exists()).toBe(false)
     expect(wrapper.text()).toContain('Demo Owner')
