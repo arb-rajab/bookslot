@@ -18,7 +18,11 @@ the next session should build.
 
 ![Owner appointments list](docs/screenshots/owner-appointments.png)
 
-_These images are illustrative mockups rendered from this repository's documented screens and API shapes, not captures of a running build. Regenerate or replace them with real captures once the app is running._
+![Owner services](docs/screenshots/owner-services.png)
+
+![Owner availability](docs/screenshots/owner-availability.png)
+
+_Real captures: a Playwright spec drives the running app against the real API with seeded demo data, run by the manual `Screenshots` workflow (`.github/workflows/screenshots.yml`). They are taken against the dev server, so the Nuxt DevTools badge shows at the bottom._
 
 ## Start here
 
