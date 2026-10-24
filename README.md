@@ -12,6 +12,14 @@ no controllers, routes, Stripe integration, or frontend do yet. See
 `docs/project-memory/12-session-handoff.md` for the current state and what
 the next session should build.
 
+## Screenshots
+
+![Public booking page](docs/screenshots/public-booking.png)
+
+![Owner appointments list](docs/screenshots/owner-appointments.png)
+
+_These images are illustrative mockups rendered from this repository's documented screens and API shapes, not captures of a running build. Regenerate or replace them with real captures once the app is running._
+
 ## Start here
 
 - [`docs/project-memory/00-project-brief.md`](docs/project-memory/00-project-brief.md) —
