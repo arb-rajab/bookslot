@@ -1,2 +1,15 @@
 # Exemptions are by advisory ID, not by package: a NEW advisory against one of these
 # packages still fails the scan. Re-check each before 2026-11-15; drop it once fixed.
+
+[[IgnoredVulns]]
+id = "GHSA-vjh5-4x84-xrqp"
+ignoreUntil = 2026-11-07T00:00:00Z
+reason = """
+nuxt 4.6.3 and @nuxt/nitro-server 4.6.3 (medium, CVSS 6.3). osv-scanner
+still flags nuxt 4.6.3, the latest release (checked 2026-10-27, CI log of the
+PR that bumped it), and lists no fixed version at all: this looks like an
+advisory-data inconsistency or a fix that has not shipped yet. The advisory text could not be retrieved from the sandbox
+that added this entry, so reachability has NOT been assessed. Before the
+expiry date: read the advisory, check for a nuxt release newer than 4.6.2,
+and either bump and delete this entry or document reachability and renew.
+"""
