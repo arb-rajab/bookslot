@@ -12,6 +12,18 @@ no controllers, routes, Stripe integration, or frontend do yet. See
 `docs/project-memory/12-session-handoff.md` for the current state and what
 the next session should build.
 
+## Screenshots
+
+![Public booking page](docs/screenshots/public-booking.png)
+
+![Owner appointments list](docs/screenshots/owner-appointments.png)
+
+![Owner services](docs/screenshots/owner-services.png)
+
+![Owner availability](docs/screenshots/owner-availability.png)
+
+_Real captures: a Playwright spec drives the running app against the real API with seeded demo data, run by the manual `Screenshots` workflow (`.github/workflows/screenshots.yml`). They are taken against the dev server, so the Nuxt DevTools badge shows at the bottom._
+
 ## Start here
 
 - [`docs/project-memory/00-project-brief.md`](docs/project-memory/00-project-brief.md) —
