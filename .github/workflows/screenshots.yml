@@ -1,0 +1,144 @@
+name: Screenshots
+
+# Real screenshots of the running app: a Chromium driven by Playwright against
+# the real Laravel API, Postgres, Redis and RabbitMQ (the E2E job's stack, with
+# a separate spec in frontend/tests/screenshots, against the seeded demo
+# tenant). Run it by hand from the Actions tab. The PNGs are uploaded as an
+# artifact; tick "commit" to also push them to docs/screenshots on the branch
+# you ran it from.
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Commit the images to docs/screenshots on this branch
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: screenshots-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  capture:
+    name: capture
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    # Only the commit step needs to write; it is skipped unless asked for.
+    permissions:
+      contents: write
+
+    services:
+      postgres:
+        image: mirror.gcr.io/library/postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres_superuser_local_only
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: mirror.gcr.io/library/redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      rabbitmq:
+        image: mirror.gcr.io/library/rabbitmq:4-management-alpine
+        env:
+          RABBITMQ_DEFAULT_USER: bookslot
+          RABBITMQ_DEFAULT_PASS: bookslot_local_only
+        ports:
+          - 5672:5672
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGPASSWORD: postgres_superuser_local_only
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.4'
+          extensions: pgsql, pdo_pgsql, redis, sockets, bcmath
+          coverage: none
+
+      - name: Authenticate Composer against GitHub API
+        run: composer config -g github-oauth.github.com "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: Install PHP dependencies
+        run: |
+          composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Prepare environment
+        run: |
+          cp .env.example .env
+          php artisan key:generate --force
+
+      - name: Create Postgres roles and databases
+        run: psql -h 127.0.0.1 -U postgres -f docker/postgres/init/01-roles-and-database.sql
+
+      - name: Migrate and seed
+        run: |
+          php artisan migrate --database=pgsql_migrator --force
+          php artisan db:seed --force
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install Playwright's Chromium
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Capture
+        working-directory: frontend
+        run: |
+          mkdir -p ../docs/screenshots
+          npm run screenshots
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: screenshots
+          path: docs/screenshots/*.png
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Commit the images
+        if: ${{ inputs.commit }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/screenshots
+          if git diff --cached --quiet; then
+            echo "No image changes to commit."
+          else
+            git commit -m "Update screenshots from CI"
+            git push origin "HEAD:${{ github.ref_name }}"
+          fi
